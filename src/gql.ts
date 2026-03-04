@@ -1,4 +1,5 @@
-const GQL_URL = 'https://hub.snapshot.org/graphql';
+const GQL_URL =
+  process.env.SNAPSHOT_API_URL ?? 'https://hub.snapshot.org/graphql';
 
 export async function gql(query: string, variables?: Record<string, unknown>) {
   const res = await fetch(GQL_URL, {
