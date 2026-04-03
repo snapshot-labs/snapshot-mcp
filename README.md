@@ -47,11 +47,23 @@ query {
 }
 ```
 
+### `snapshot-vote`
+
+Casts a vote on a Snapshot proposal. Automatically resolves the authorized user. If not yet authorized, returns the authorization URL for the user to visit.
+
+| Input | Type | Description |
+|-------|------|-------------|
+| `space` | `string` | Space ID (e.g. `"ens.eth"`) |
+| `proposal` | `string` | Proposal ID (hex string) |
+| `choice` | `number \| number[] \| object` | Vote choice — number for single-choice/basic, array for approval/ranked-choice, object for weighted/quadratic |
+| `reason` | `string` | Reason for the vote (optional) |
+| `type` | `string` | Voting type: `basic`, `single-choice`, `approval`, `ranked-choice`, `weighted`, `quadratic` (optional, defaults to `basic`) |
+
+> **Note:** `snapshot-vote` requires a wallet to be configured for signing (see below). Without a wallet, it returns a configuration error.
+
 ## Usage
 
-### Claude Desktop / Claude.ai
-
-Add to your MCP client configuration:
+### Hosted (Claude Desktop / Claude.ai)
 
 ```json
 {
@@ -70,14 +82,74 @@ Add to your MCP client configuration:
 
 ```bash
 bun install
+```
+
+#### HTTP server
+
+```bash
 bun start
 ```
 
-The server listens on port `8080` by default. Copy `.env.example` to `.env` and configure:
+Listens on port `8080` by default (override with `PORT` env var).
+
+#### Stdio (local)
+
+```bash
+bun stdio.ts
+```
+
+Claude Desktop config example:
+
+```json
+{
+  "mcpServers": {
+    "snapshot": {
+      "command": "bun",
+      "args": ["stdio.ts"],
+      "cwd": "/path/to/snapshot-mcp",
+      "env": {
+        "ALIAS_PRIVATE_KEY": "0x..."
+      }
+    }
+  }
+}
+```
+
+## Configuration
+
+Copy `.env.example` to `.env` and configure:
 
 | Variable | Description |
 |----------|-------------|
 | `SNAPSHOT_API_KEY` | [Snapshot API key](https://docs.snapshot.box/tools/api/api-keys) for higher rate limits (optional) |
+| `PORT` | HTTP server port (default: `8080`) |
+| `BASE_URL` | Public URL for OAuth metadata (e.g. `https://mcp.snapshot.box`) |
+| `ALIAS_PRIVATE_KEY` | Private key for the alias wallet (option 1) |
+| `CDP_API_KEY_ID` | Coinbase CDP API key ID (option 2) |
+| `CDP_API_KEY_SECRET` | Coinbase CDP API key secret (option 2) |
+| `CDP_WALLET_SECRET` | Coinbase CDP wallet secret (option 2) |
+
+Wallet configuration is optional. Without it, only `snapshot-schema` and `snapshot-query` are available.
+
+## Auth flow
+
+### HTTP (Claude Desktop / Claude.ai) — OAuth 2.0
+
+When a wallet is configured, the HTTP server exposes OAuth 2.0 endpoints. Claude Desktop and Claude.ai will show a **"Connect" button** that triggers the flow automatically:
+
+1. Claude redirects to `/authorize`
+2. Server redirects to `snapshot.box/#/settings/alias/authorize/<alias>` with a callback URL
+3. User authorizes the alias on Snapshot
+4. Snapshot redirects back to `/auth/callback`
+5. Server verifies authorization, generates an auth code, and redirects back to Claude
+6. Claude exchanges the code for an access token at `/token`
+7. All subsequent requests include the token — tools resolve the user automatically
+
+### Stdio (local)
+
+1. Call `snapshot-vote` — if not yet authorized, returns the authorization URL
+2. User visits `snapshot.box/#/settings/alias/authorize/<alias>` to authorize
+3. Call `snapshot-vote` again — works
 
 ## Development
 

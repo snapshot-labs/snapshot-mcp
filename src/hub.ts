@@ -1,7 +1,7 @@
-const GQL_URL = 'https://hub.snapshot.org/graphql';
+const SNAPSHOT_API_URL = 'https://hub.snapshot.org/graphql';
 
 export async function gql(query: string, variables?: Record<string, unknown>) {
-  const res = await fetch(GQL_URL, {
+  const res = await fetch(SNAPSHOT_API_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -22,22 +22,6 @@ export async function gql(query: string, variables?: Record<string, unknown>) {
   }
 
   return json.data;
-}
-
-export function toContent(result: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }]
-  };
-}
-
-export function toError(e: unknown) {
-  const message = e instanceof Error ? e.message : String(e);
-  console.error('[snapshot-mcp]', message);
-
-  return {
-    content: [{ type: 'text' as const, text: `Error: ${message}` }],
-    isError: true
-  };
 }
 
 const BUILTIN_TYPES = new Set(['String', 'Boolean', 'Int', 'Float', 'ID']);
