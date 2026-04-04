@@ -1,27 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { clients, offchainMainnet } from '@snapshot-labs/sx';
 import { z } from 'zod';
-import { gql, schemaCache } from './hub.js';
+import { gql, schemaCache, toContent, toError } from './hub.js';
+import { search } from './search.js';
 import { getWallet } from './wallet.js';
 
 const sx = new clients.OffchainEthereumSig({
   networkConfig: offchainMainnet
 });
-
-function toContent(result: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }]
-  };
-}
-
-function toError(e: unknown) {
-  const message = e instanceof Error ? e.message : String(e);
-  console.error('[snapshot-mcp]', message);
-  return {
-    content: [{ type: 'text' as const, text: `Error: ${message}` }],
-    isError: true
-  };
-}
 
 async function handle(fn: () => Promise<unknown>) {
   try {
@@ -134,6 +120,28 @@ export function createMcpServer(): McpServer {
         });
         return sx.send(envelope);
       })
+  );
+
+  server.registerTool(
+    'snapshot-search',
+    {
+      description:
+        'Semantic search across Snapshot proposals and spaces. Uses vector embeddings + text search (BM25) with rank fusion for high-quality results. Use this to find proposals or spaces by topic, keyword, or natural language query. Returns scored results sorted by relevance.',
+      inputSchema: {
+        q: z.string().describe('Search query (natural language or keywords)'),
+        space: z
+          .string()
+          .optional()
+          .describe(
+            'Filter proposals by space ID (e.g. "ens.eth"). Cannot be used with type "space".'
+          ),
+        type: z
+          .enum(['proposal', 'space'])
+          .optional()
+          .describe('Limit to "proposal" or "space". Omit to search both.')
+      }
+    },
+    ({ q, space, type }) => handle(() => search(q, space, type))
   );
 
   return server;
