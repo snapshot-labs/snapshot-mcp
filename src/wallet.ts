@@ -79,14 +79,6 @@ function getCdpClient(): CdpClient {
   return cdpClient;
 }
 
-export function isHttpWalletConfigured(): boolean {
-  return !!(
-    process.env.CDP_API_KEY_ID &&
-    process.env.CDP_API_KEY_SECRET &&
-    process.env.CDP_WALLET_SECRET
-  );
-}
-
 let cachedPolicyId: string | null = null;
 
 async function ensurePolicy(): Promise<string> {

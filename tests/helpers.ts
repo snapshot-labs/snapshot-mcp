@@ -1,58 +1,36 @@
 import { Wallet } from '@ethersproject/wallet';
 import { mock } from 'bun:test';
-import { initJwtSecret } from '../src/token.js';
+import { SnapshotOAuthProvider } from '../src/auth.js';
 
-const FIXED_TEST_SECRET =
+process.env.JWT_SECRET ??=
   'test-secret-must-be-at-least-32-chars-long-please-yes';
-initJwtSecret(FIXED_TEST_SECRET);
 
-export const state: {
-  jwtSecret: string;
-  userSigners: Map<string, Wallet>;
-  gqlHandler: (query: string, variables?: any) => unknown;
-} = {
-  jwtSecret: FIXED_TEST_SECRET,
-  userSigners: new Map(),
-  gqlHandler: () => ({})
-};
-
-export function setJwtSecret(s: string) {
-  state.jwtSecret = s;
-  initJwtSecret(s);
-}
+let gqlHandler: (query: string, variables?: any) => unknown = () => ({});
 
 export function setGqlHandler(fn: (query: string, variables?: any) => unknown) {
-  state.gqlHandler = fn;
-}
-
-export function resetState() {
-  state.jwtSecret = FIXED_TEST_SECRET;
-  initJwtSecret(FIXED_TEST_SECRET);
-  state.userSigners.clear();
-  state.gqlHandler = () => ({});
+  gqlHandler = fn;
 }
 
 mock.module('../src/wallet.ts', () => ({
-  getWalletForUser: async (signerKey: string) => {
-    let w = state.userSigners.get(signerKey);
-    if (!w) {
-      w = Wallet.createRandom();
-      state.userSigners.set(signerKey, w);
-    }
-    return w;
-  },
+  getWalletForUser: async () => Wallet.createRandom(),
   createFreshAccount: async () => {
     const w = Wallet.createRandom();
-    const signerKey = `s-${w.address.slice(2, 18).toLowerCase()}`;
-    state.userSigners.set(signerKey, w);
-    return { signerKey, signerAddress: w.address };
+    return {
+      signerKey: `s-${w.address.slice(2, 18).toLowerCase()}`,
+      signerAddress: w.address
+    };
   },
-  getStdioWallet: () => Wallet.createRandom(),
-  isHttpWalletConfigured: () => true
+  getStdioWallet: () => Wallet.createRandom()
 }));
 
 mock.module('../src/hub.ts', () => ({
-  gql: async (q: string, v?: any) => state.gqlHandler(q, v),
+  gql: async (q: string, v?: any) => gqlHandler(q, v),
+  resolveUserAddressFromAlias: async (alias: string) => {
+    const result = (await gqlHandler('aliases', {
+      where: { alias }
+    })) as { aliases?: { address: string }[] };
+    return (result?.aliases ?? [])[0]?.address;
+  },
   schemaCache: Promise.resolve({}),
   toContent: (r: unknown) => ({
     content: [{ type: 'text', text: JSON.stringify(r) }]
@@ -62,3 +40,57 @@ mock.module('../src/hub.ts', () => ({
     isError: true
   })
 }));
+
+export function makeRes() {
+  let redirectedTo: string | null = null;
+  return {
+    redirect: (url: string) => {
+      redirectedTo = url;
+    },
+    get redirectedTo() {
+      return redirectedTo;
+    }
+  };
+}
+
+const REDIRECT_URI = 'http://localhost:17623/oauth/callback';
+const PKCE_CHALLENGE = 'test-challenge-7chars-or-more-here';
+
+export const CLIENT_METADATA = {
+  redirect_uris: [REDIRECT_URI],
+  token_endpoint_auth_method: 'none',
+  grant_types: ['authorization_code'],
+  response_types: ['code'],
+  client_name: 'Test Client'
+} as any;
+
+export async function startAuthFlow(
+  provider: SnapshotOAuthProvider,
+  opts: {
+    client?: any;
+    codeChallenge?: string;
+    state?: string;
+  } = {}
+) {
+  const client =
+    opts.client ??
+    (await provider.clientsStore.registerClient!(CLIENT_METADATA));
+  const res = makeRes();
+  await provider.authorize(
+    client,
+    {
+      redirectUri: REDIRECT_URI,
+      state: opts.state ?? 'csrf-state-xyz',
+      codeChallenge: opts.codeChallenge ?? PKCE_CHALLENGE,
+      codeChallengeMethod: 'S256',
+      scopes: []
+    } as any,
+    res as any
+  );
+  const url = res.redirectedTo as string;
+  const aliasAddress = url.match(/authorize\/(0x[0-9a-fA-F]+)/)![1];
+  const sessionId = decodeURIComponent(url).match(/session=([a-f0-9-]+)/)![1];
+  return { client, aliasAddress, sessionId };
+}
+
+export { PKCE_CHALLENGE, REDIRECT_URI };

@@ -1,7 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { clients, offchainMainnet } from '@snapshot-labs/sx';
 import { z } from 'zod';
-import { gql, schemaCache, toContent, toError } from './hub.js';
+import {
+  gql,
+  resolveUserAddressFromAlias,
+  schemaCache,
+  toContent,
+  toError
+} from './hub.js';
 import { search } from './search.js';
 import { getStdioWallet, getWalletForUser } from './wallet.js';
 
@@ -23,18 +29,13 @@ export function createMcpServer({
   const server = new McpServer({ name: 'snapshot', version: '0.1.0' });
 
   async function resolveContext(extra?: Record<string, unknown>) {
-    const oauthAddress = (extra?.authInfo as any)?.extra?.userAddress as
-      | string
-      | undefined;
-    const oauthSignerKey = (extra?.authInfo as any)?.extra?.signerKey as
-      | string
-      | undefined;
+    const { userAddress, signerKey } =
+      ((extra?.authInfo as any)?.extra as
+        | { userAddress?: string; signerKey?: string }
+        | undefined) ?? {};
 
-    if (oauthAddress && oauthSignerKey) {
-      return {
-        userAddress: oauthAddress,
-        signer: await getWalletForUser(oauthSignerKey)
-      };
+    if (userAddress && signerKey) {
+      return { userAddress, signer: await getWalletForUser(signerKey) };
     }
 
     if (mode === 'http') {
@@ -45,19 +46,13 @@ export function createMcpServer({
 
     const signer = getStdioWallet();
     const alias = await signer.getAddress();
-    const result = await gql(
-      `query Aliases($where: AliasWhere) {
-        aliases(first: 1, skip: 0, where: $where) { address }
-      }`,
-      { where: { alias } }
-    );
-    const userAddress = ((result as any)?.aliases ?? [])[0]?.address;
-    if (!userAddress) {
+    const resolved = await resolveUserAddressFromAlias(alias);
+    if (!resolved) {
       throw new Error(
         `Not authorized. Visit https://snapshot.box/#/settings/alias/authorize/${alias} to authorize, then retry.`
       );
     }
-    return { userAddress, signer };
+    return { userAddress: resolved, signer };
   }
 
   server.registerTool(

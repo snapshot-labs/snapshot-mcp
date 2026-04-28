@@ -6,24 +6,6 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { SnapshotOAuthProvider } from './auth.js';
 import { createMcpServer } from './server.js';
-import { initJwtSecret } from './token.js';
-import { isHttpWalletConfigured } from './wallet.js';
-
-if (!isHttpWalletConfigured()) {
-  console.error(
-    'HTTP server requires CDP credentials. Set CDP_API_KEY_ID, CDP_API_KEY_SECRET, and CDP_WALLET_SECRET.'
-  );
-  process.exit(1);
-}
-
-const jwtSecret = process.env.JWT_SECRET;
-if (!jwtSecret || jwtSecret.length < 32) {
-  console.error(
-    'JWT_SECRET must be set and at least 32 characters. Generate one with: openssl rand -hex 32'
-  );
-  process.exit(1);
-}
-initJwtSecret(jwtSecret);
 
 const port = Number(process.env.PORT ?? 8080);
 const baseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;

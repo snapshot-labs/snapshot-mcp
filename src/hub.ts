@@ -25,6 +25,18 @@ export async function gql(query: string, variables?: Record<string, unknown>) {
   return json.data;
 }
 
+export async function resolveUserAddressFromAlias(
+  alias: string
+): Promise<string | undefined> {
+  const result = await gql(
+    `query Aliases($where: AliasWhere) {
+      aliases(first: 1, skip: 0, where: $where) { address }
+    }`,
+    { where: { alias } }
+  );
+  return ((result as any)?.aliases ?? [])[0]?.address;
+}
+
 export function toContent(result: unknown) {
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }]

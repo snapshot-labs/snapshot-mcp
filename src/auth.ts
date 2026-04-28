@@ -10,14 +10,78 @@ import {
   OAuthTokens
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { Request, Response } from 'express';
-import { gql } from './hub.js';
-import {
-  signAccessToken,
-  signClientId,
-  verifyClientId,
-  verifyAccessToken as verifyTokenSig
-} from './token.js';
+import { JWTPayload, jwtVerify, SignJWT } from 'jose';
+import { resolveUserAddressFromAlias } from './hub.js';
 import { createFreshAccount } from './wallet.js';
+
+const ALG = 'HS256';
+
+let cachedSecret: Uint8Array | null = null;
+let cachedSecretSource: string | null = null;
+
+function getSecret(): Uint8Array {
+  const raw = process.env.JWT_SECRET;
+  if (!raw || raw.length < 32) {
+    throw new Error(
+      'JWT_SECRET must be set and at least 32 characters. Generate one with: openssl rand -hex 32'
+    );
+  }
+  if (raw !== cachedSecretSource) {
+    cachedSecret = new TextEncoder().encode(raw);
+    cachedSecretSource = raw;
+  }
+  return cachedSecret!;
+}
+
+async function sign(claims: JWTPayload): Promise<string> {
+  return new SignJWT({ ...claims, nonce: randomUUID() })
+    .setProtectedHeader({ alg: ALG })
+    .setIssuedAt()
+    .sign(getSecret());
+}
+
+async function verify(token: string): Promise<JWTPayload> {
+  const { payload } = await jwtVerify(token, getSecret(), {
+    algorithms: [ALG]
+  });
+  return payload;
+}
+
+export async function signAccessToken(payload: {
+  userAddress: string;
+  signerKey: string;
+  clientId: string;
+}): Promise<string> {
+  return sign({
+    sub: payload.userAddress,
+    aud: payload.clientId,
+    signerKey: payload.signerKey
+  });
+}
+
+export async function verifyAccessToken(token: string) {
+  const p = await verify(token);
+  if (!p.sub || !p.aud || typeof p.signerKey !== 'string') {
+    throw new Error('Invalid token');
+  }
+  return {
+    userAddress: p.sub as string,
+    signerKey: p.signerKey,
+    clientId: p.aud as string,
+    issuedAt: p.iat as number,
+    nonce: p.nonce as string
+  };
+}
+
+async function signClientId(metadata: unknown): Promise<string> {
+  return sign({ metadata: JSON.stringify(metadata) });
+}
+
+async function verifyClientId(clientId: string): Promise<any> {
+  const p = await verify(clientId);
+  if (typeof p.metadata !== 'string') throw new Error('Invalid client_id');
+  return JSON.parse(p.metadata);
+}
 
 const clientsStore: OAuthRegisteredClientsStore = {
   async getClient(clientId) {
@@ -38,27 +102,20 @@ const clientsStore: OAuthRegisteredClientsStore = {
   }
 };
 
-interface PendingSession {
+interface Session {
+  clientId: string;
+  codeChallenge: string;
   redirectUri: string;
+  signerKey: string;
   state?: string;
-  codeChallenge: string;
-  clientId: string;
-  signerKey: string;
-  signerAddress: string;
-}
-
-interface CodeRecord {
-  clientId: string;
-  codeChallenge: string;
-  userAddress: string;
-  redirectUri: string;
-  signerKey: string;
+  signerAddress?: string;
+  userAddress?: string;
 }
 
 export class SnapshotOAuthProvider implements OAuthServerProvider {
   clientsStore = clientsStore;
-  private pendingSessions = new Map<string, PendingSession>();
-  private codes = new Map<string, CodeRecord>();
+  private pendingSessions = new Map<string, Session>();
+  private codes = new Map<string, Session>();
 
   async authorize(
     client: OAuthClientInformationFull,
@@ -105,7 +162,7 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     this.codes.delete(authorizationCode);
 
     const accessToken = await signAccessToken({
-      userAddress: record.userAddress,
+      userAddress: record.userAddress!,
       signerKey: record.signerKey,
       clientId: client.client_id
     });
@@ -118,7 +175,7 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const payload = await verifyTokenSig(token);
+    const payload = await verifyAccessToken(token);
     return {
       token,
       clientId: payload.clientId,
@@ -134,31 +191,17 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     };
   }
 
-  async revokeToken(): Promise<void> {
-    // no-op: stateless tokens can't be revoked without a deny-list
-  }
-
   async handleCallback(sessionId: string): Promise<string> {
     const session = this.pendingSessions.get(sessionId);
     if (!session) throw new Error('Unknown session');
 
-    const result = await gql(
-      `query Aliases($where: AliasWhere) {
-        aliases(first: 1, skip: 0, where: $where) { address }
-      }`,
-      { where: { alias: session.signerAddress } }
+    const userAddress = await resolveUserAddressFromAlias(
+      session.signerAddress!
     );
-    const userAddress = ((result as any)?.aliases ?? [])[0]?.address;
     if (!userAddress) throw new Error('Alias not authorized');
 
     const code = randomUUID();
-    this.codes.set(code, {
-      clientId: session.clientId,
-      codeChallenge: session.codeChallenge,
-      userAddress,
-      redirectUri: session.redirectUri,
-      signerKey: session.signerKey
-    });
+    this.codes.set(code, { ...session, userAddress });
     this.pendingSessions.delete(sessionId);
 
     const url = new URL(session.redirectUri);

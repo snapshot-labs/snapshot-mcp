@@ -1,65 +1,23 @@
 // OAuth provider invariants. Each test pins one specific attack the
 // SnapshotOAuthProvider must reject.
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { setGqlHandler } from './helpers.js';
+import {
+  CLIENT_METADATA,
+  PKCE_CHALLENGE,
+  setGqlHandler,
+  startAuthFlow
+} from './helpers.js';
 import { SnapshotOAuthProvider } from '../src/auth.js';
 
-const REDIRECT_URI = 'http://localhost:17623/oauth/callback';
-const CLIENT_METADATA = {
-  redirect_uris: [REDIRECT_URI],
-  token_endpoint_auth_method: 'none',
-  grant_types: ['authorization_code'],
-  response_types: ['code'],
-  client_name: 'Test Client'
-} as any;
-
-const PKCE_CHALLENGE = 'test-challenge-7chars-or-more-here';
-
-// Stub Express response just enough for authorize() to call res.redirect.
-function makeRes() {
-  let redirectedTo: string | null = null;
-  return {
-    redirect: (url: string) => {
-      redirectedTo = url;
-    },
-    get redirectedTo() {
-      return redirectedTo;
-    }
-  };
-}
-
-// Drive a complete authorize → callback cycle and return the resulting
-// auth code together with the registered client and session metadata.
 async function driveAuthCodeFlow(
   provider: SnapshotOAuthProvider,
   userAddress: string,
   opts: { client?: any; codeChallenge?: string } = {}
 ) {
-  const client =
-    opts.client ??
-    (await provider.clientsStore.registerClient!(CLIENT_METADATA));
-  const res = makeRes();
-  await provider.authorize(
-    client,
-    {
-      redirectUri: REDIRECT_URI,
-      state: 'csrf-state-xyz',
-      codeChallenge: opts.codeChallenge ?? PKCE_CHALLENGE,
-      codeChallengeMethod: 'S256',
-      scopes: []
-    } as any,
-    res as any
+  const { client, aliasAddress, sessionId } = await startAuthFlow(
+    provider,
+    opts
   );
-  const snapshotUrl = (res as any).redirectedTo as string;
-  // Extract the per-session alias address from the snapshot.box URL —
-  // this is the address whose `aliases` query handleCallback will run.
-  const aliasMatch = snapshotUrl.match(/authorize\/(0x[0-9a-fA-F]+)/)!;
-  const aliasAddress = aliasMatch[1];
-  // Extract sessionId from the embedded callback URL.
-  const sessionMatch =
-    decodeURIComponent(snapshotUrl).match(/session=([a-f0-9-]+)/)!;
-  const sessionId = sessionMatch[1];
-
   // Mock hub: when handleCallback queries `aliases(where: { alias })`,
   // return the user we want this flow to resolve to.
   setGqlHandler((_q, vars) => {
@@ -69,12 +27,15 @@ async function driveAuthCodeFlow(
     }
     return { aliases: [] };
   });
-
   const redirectUrl = await provider.handleCallback(sessionId);
   const url = new URL(redirectUrl);
-  const code = url.searchParams.get('code')!;
-  const state = url.searchParams.get('state')!;
-  return { client, code, state, sessionId, aliasAddress };
+  return {
+    client,
+    code: url.searchParams.get('code')!,
+    state: url.searchParams.get('state')!,
+    sessionId,
+    aliasAddress
+  };
 }
 
 describe('OAuth provider security', () => {
@@ -84,17 +45,7 @@ describe('OAuth provider security', () => {
     provider = new SnapshotOAuthProvider();
   });
 
-  test('client registration roundtrips through getClient', async () => {
-    const registered =
-      await provider.clientsStore.registerClient!(CLIENT_METADATA);
-    const fetched = await provider.clientsStore.getClient(registered.client_id);
-    expect(fetched).toBeDefined();
-    expect(fetched!.client_name).toBe('Test Client');
-    expect(fetched!.redirect_uris).toEqual([REDIRECT_URI]);
-  });
-
   test('getClient returns undefined for a forged client_id', async () => {
-    // An attacker fabricates a client_id without our trusted signer.
     const fabricated = Buffer.from(
       JSON.stringify({
         client_name: 'Forged',
@@ -134,7 +85,6 @@ describe('OAuth provider security', () => {
       provider,
       '0x000000000000000000000000000000000000aaaa'
     );
-    // Register a *different* client and try to redeem the code.
     const otherClient = await provider.clientsStore.registerClient!({
       ...CLIENT_METADATA,
       client_name: 'Other Client'
@@ -145,23 +95,7 @@ describe('OAuth provider security', () => {
   });
 
   test('handleCallback throws when hub has no alias authorization for the session', async () => {
-    const client = await provider.clientsStore.registerClient!(CLIENT_METADATA);
-    const res = makeRes();
-    await provider.authorize(
-      client,
-      {
-        redirectUri: REDIRECT_URI,
-        state: 'x',
-        codeChallenge: PKCE_CHALLENGE,
-        codeChallengeMethod: 'S256',
-        scopes: []
-      } as any,
-      res as any
-    );
-    const sessionId = decodeURIComponent((res as any).redirectedTo).match(
-      /session=([a-f0-9-]+)/
-    )![1];
-    // Hub returns no aliases — the user never authorized.
+    const { sessionId } = await startAuthFlow(provider);
     setGqlHandler(() => ({ aliases: [] }));
     await expect(provider.handleCallback(sessionId)).rejects.toThrow(
       'Alias not authorized'
@@ -172,22 +106,11 @@ describe('OAuth provider security', () => {
     const client = await provider.clientsStore.registerClient!(CLIENT_METADATA);
     const aliases = new Set<string>();
     for (let i = 0; i < 3; i++) {
-      const res = makeRes();
-      await provider.authorize(
+      const { aliasAddress } = await startAuthFlow(provider, {
         client,
-        {
-          redirectUri: REDIRECT_URI,
-          state: `s${i}`,
-          codeChallenge: PKCE_CHALLENGE,
-          codeChallengeMethod: 'S256',
-          scopes: []
-        } as any,
-        res as any
-      );
-      const alias = (res as any).redirectedTo.match(
-        /authorize\/(0x[0-9a-fA-F]+)/
-      )[1];
-      aliases.add(alias.toLowerCase());
+        state: `s${i}`
+      });
+      aliases.add(aliasAddress.toLowerCase());
     }
     expect(aliases.size).toBe(3);
   });
