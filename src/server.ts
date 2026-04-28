@@ -3,7 +3,7 @@ import { clients, offchainMainnet } from '@snapshot-labs/sx';
 import { z } from 'zod';
 import { gql, schemaCache, toContent, toError } from './hub.js';
 import { search } from './search.js';
-import { getWallet } from './wallet.js';
+import { getStdioWallet, getWalletForUser } from './wallet.js';
 
 const sx = new clients.OffchainEthereumSig({
   networkConfig: offchainMainnet
@@ -17,35 +17,47 @@ async function handle(fn: () => Promise<unknown>) {
   }
 }
 
-export function createMcpServer(): McpServer {
+export function createMcpServer({
+  mode = 'stdio'
+}: { mode?: 'http' | 'stdio' } = {}): McpServer {
   const server = new McpServer({ name: 'snapshot', version: '0.1.0' });
 
-  let userAddress: string | null = null;
-
-  async function resolveUser(extra?: Record<string, unknown>): Promise<string> {
+  async function resolveContext(extra?: Record<string, unknown>) {
     const oauthAddress = (extra?.authInfo as any)?.extra?.userAddress as
       | string
       | undefined;
-    if (oauthAddress) return oauthAddress;
-    if (userAddress) return userAddress;
+    const oauthSignerKey = (extra?.authInfo as any)?.extra?.signerKey as
+      | string
+      | undefined;
 
-    const alias = await (await getWallet()).getAddress();
+    if (oauthAddress && oauthSignerKey) {
+      return {
+        userAddress: oauthAddress,
+        signer: await getWalletForUser(oauthSignerKey)
+      };
+    }
+
+    if (mode === 'http') {
+      throw new Error(
+        'Not authenticated. Click Connect in your MCP client to authorize with Snapshot.'
+      );
+    }
+
+    const signer = getStdioWallet();
+    const alias = await signer.getAddress();
     const result = await gql(
       `query Aliases($where: AliasWhere) {
-        aliases(first: 1, skip: 0, where: $where) {
-          address
-        }
+        aliases(first: 1, skip: 0, where: $where) { address }
       }`,
       { where: { alias } }
     );
-
-    const found = ((result as any)?.aliases ?? [])[0]?.address;
-    if (!found)
+    const userAddress = ((result as any)?.aliases ?? [])[0]?.address;
+    if (!userAddress) {
       throw new Error(
         `Not authorized. Visit https://snapshot.box/#/settings/alias/authorize/${alias} to authorize, then retry.`
       );
-
-    return (userAddress = found);
+    }
+    return { userAddress, signer };
   }
 
   server.registerTool(
@@ -103,9 +115,9 @@ export function createMcpServer(): McpServer {
     },
     (data, extra) =>
       handle(async () => {
-        const from = await resolveUser(extra);
+        const { userAddress: from, signer } = await resolveContext(extra);
         const envelope = await sx.vote({
-          signer: (await getWallet()) as any,
+          signer: signer as any,
           data: {
             ...data,
             from,

@@ -1,75 +1,138 @@
+import { randomBytes } from 'node:crypto';
 import { CdpClient } from '@coinbase/cdp-sdk';
 import { Wallet } from '@ethersproject/wallet';
 
-/**
- * Adapter that wraps a Coinbase CDP EvmServerAccount to implement
- * the ethers v5 Signer & TypedDataSigner interface required by sx.js.
- */
-class CdpSignerAdapter {
-  readonly address: string;
-  private account: any; // CDP EvmServerAccount
+const POLICY_DESCRIPTION = 'snapshot mcp vote only v1';
 
-  constructor(account: any) {
-    this.address = account.address;
-    this.account = account;
-  }
+// Blast-radius reduction if CDP_WALLET_SECRET leaks: only signEvmTypedData
+// is allowed (what Snapshot votes and our access tokens need). Everything
+// else — transactions, arbitrary messages, hashes — is rejected.
+const POLICY_RULES = [
+  {
+    action: 'reject',
+    operation: 'signEvmTransaction',
+    criteria: [{ type: 'ethValue', ethValue: '0', operator: '>=' }]
+  },
+  {
+    action: 'reject',
+    operation: 'sendEvmTransaction',
+    criteria: [{ type: 'ethValue', ethValue: '0', operator: '>=' }]
+  },
+  {
+    action: 'reject',
+    operation: 'signEvmMessage',
+    criteria: [{ type: 'evmMessage', match: '.*' }]
+  },
+  { action: 'reject', operation: 'signEvmHash' }
+] as const;
 
-  async getAddress(): Promise<string> {
-    return this.address;
-  }
+const DOMAIN_FIELD_TYPES: Record<string, string> = {
+  name: 'string',
+  version: 'string',
+  chainId: 'uint256',
+  verifyingContract: 'address',
+  salt: 'bytes32'
+};
 
-  async _signTypedData(
-    domain: Record<string, any>,
-    types: Record<string, Array<{ name: string; type: string }>>,
-    value: Record<string, any>
-  ): Promise<string> {
-    const primaryType = Object.keys(types).find(t => t !== 'EIP712Domain');
-    if (!primaryType)
-      throw new Error('Could not determine primaryType from types');
+export type CdpSigner = ReturnType<typeof makeCdpSigner>;
 
-    return this.account.signTypedData({
-      domain,
-      types: { ...types, EIP712Domain: [] },
-      primaryType,
-      message: value
-    });
-  }
+function makeCdpSigner(account: any) {
+  return {
+    address: account.address as string,
+    getAddress: async () => account.address as string,
+    _signTypedData: async (
+      domain: Record<string, any>,
+      types: Record<string, Array<{ name: string; type: string }>>,
+      value: Record<string, any>
+    ): Promise<string> => {
+      const primaryType = Object.keys(types).find(t => t !== 'EIP712Domain');
+      if (!primaryType)
+        throw new Error('Could not determine primaryType from types');
+      const EIP712Domain = Object.keys(domain)
+        .filter(k => domain[k] !== undefined && DOMAIN_FIELD_TYPES[k])
+        .map(k => ({ name: k, type: DOMAIN_FIELD_TYPES[k] }));
+      return account.signTypedData({
+        domain,
+        types: { ...types, EIP712Domain },
+        primaryType,
+        message: value
+      });
+    }
+  };
 }
 
-async function initWallet(): Promise<Wallet | CdpSignerAdapter> {
-  const privateKey = process.env.ALIAS_PRIVATE_KEY;
-  if (privateKey) return new Wallet(privateKey);
+let cdpClient: CdpClient | null = null;
 
-  const cdpKeyId = process.env.CDP_API_KEY_ID;
-  const cdpKeySecret = process.env.CDP_API_KEY_SECRET;
-  const cdpWalletSecret = process.env.CDP_WALLET_SECRET;
+function getCdpClient(): CdpClient {
+  if (cdpClient) return cdpClient;
 
-  if (cdpKeyId && cdpKeySecret && cdpWalletSecret) {
-    const cdp = new CdpClient({
-      apiKeyId: cdpKeyId,
-      apiKeySecret: cdpKeySecret,
-      walletSecret: cdpWalletSecret
-    });
-    const account = await cdp.evm.createAccount();
-    return new CdpSignerAdapter(account);
+  const apiKeyId = process.env.CDP_API_KEY_ID;
+  const apiKeySecret = process.env.CDP_API_KEY_SECRET;
+  const walletSecret = process.env.CDP_WALLET_SECRET;
+  if (!apiKeyId || !apiKeySecret || !walletSecret) {
+    throw new Error(
+      'CDP credentials not configured: set CDP_API_KEY_ID, CDP_API_KEY_SECRET, CDP_WALLET_SECRET'
+    );
   }
 
-  throw new Error(
-    'No wallet configured. Set ALIAS_PRIVATE_KEY or CDP_API_KEY_ID + CDP_API_KEY_SECRET + CDP_WALLET_SECRET.'
-  );
+  cdpClient = new CdpClient({ apiKeyId, apiKeySecret, walletSecret });
+  return cdpClient;
 }
 
-let walletPromise: Promise<Wallet | CdpSignerAdapter> | null = null;
-
-export function getWallet() {
-  return (walletPromise ??= initWallet());
-}
-
-export function isWalletConfigured(): boolean {
+export function isHttpWalletConfigured(): boolean {
   return !!(
-    process.env.ALIAS_PRIVATE_KEY ||
-    (process.env.CDP_API_KEY_ID &&
-      process.env.CDP_API_KEY_SECRET &&
-      process.env.CDP_WALLET_SECRET)
+    process.env.CDP_API_KEY_ID &&
+    process.env.CDP_API_KEY_SECRET &&
+    process.env.CDP_WALLET_SECRET
   );
+}
+
+let cachedPolicyId: string | null = null;
+
+async function ensurePolicy(): Promise<string> {
+  if (cachedPolicyId) return cachedPolicyId;
+
+  const cdp = getCdpClient();
+  const { policies } = await cdp.policies.listPolicies({ scope: 'account' });
+  const existing = policies.find(p => p.description === POLICY_DESCRIPTION);
+  if (existing) return (cachedPolicyId = existing.id);
+
+  const created = await cdp.policies.createPolicy({
+    policy: {
+      scope: 'account',
+      description: POLICY_DESCRIPTION,
+      rules: POLICY_RULES as any
+    }
+  });
+  return (cachedPolicyId = created.id);
+}
+
+export async function getWalletForUser(signerKey: string): Promise<CdpSigner> {
+  const account = await getCdpClient().evm.getOrCreateAccount({
+    name: signerKey
+  });
+  return makeCdpSigner(account);
+}
+
+export async function createFreshAccount(): Promise<{
+  signerKey: string;
+  signerAddress: string;
+}> {
+  const signerKey = `s-${randomBytes(16).toString('hex')}`;
+  const accountPolicy = await ensurePolicy();
+  const account = await getCdpClient().evm.createAccount({
+    name: signerKey,
+    accountPolicy
+  });
+  return { signerKey, signerAddress: account.address };
+}
+
+export function getStdioWallet(): Wallet {
+  const privateKey = process.env.ALIAS_PRIVATE_KEY;
+  if (!privateKey) {
+    throw new Error(
+      'ALIAS_PRIVATE_KEY is required for stdio mode. Set it in .env.'
+    );
+  }
+  return new Wallet(privateKey);
 }

@@ -7,47 +7,44 @@ import {
 import { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import {
   OAuthClientInformationFull,
-  OAuthTokenRevocationRequest,
   OAuthTokens
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { Request, Response } from 'express';
 import { gql } from './hub.js';
-import { getWallet } from './wallet.js';
+import {
+  signAccessToken,
+  signClientId,
+  verifyClientId,
+  verifyAccessToken as verifyTokenSig
+} from './token.js';
+import { createFreshAccount } from './wallet.js';
 
-const TOKEN_TTL = 86400; // 24 hours
-
-// --- Clients store ---
-
-class ClientsStore implements OAuthRegisteredClientsStore {
-  private clients = new Map<string, OAuthClientInformationFull>();
-
-  getClient(clientId: string) {
-    return this.clients.get(clientId);
-  }
-
-  registerClient(
-    client: Omit<
-      OAuthClientInformationFull,
-      'client_id' | 'client_id_issued_at'
-    >
-  ): OAuthClientInformationFull {
-    const full: OAuthClientInformationFull = {
+const clientsStore: OAuthRegisteredClientsStore = {
+  async getClient(clientId) {
+    try {
+      const metadata = await verifyClientId(clientId);
+      return { ...metadata, client_id: clientId };
+    } catch {
+      return undefined;
+    }
+  },
+  async registerClient(client) {
+    const metadata = {
       ...client,
-      client_id: randomUUID(),
       client_id_issued_at: Math.floor(Date.now() / 1000)
-    } as OAuthClientInformationFull;
-    this.clients.set(full.client_id, full);
-    return full;
+    };
+    const client_id = await signClientId(metadata);
+    return { ...metadata, client_id } as OAuthClientInformationFull;
   }
-}
-
-// --- Provider ---
+};
 
 interface PendingSession {
   redirectUri: string;
   state?: string;
   codeChallenge: string;
   clientId: string;
+  signerKey: string;
+  signerAddress: string;
 }
 
 interface CodeRecord {
@@ -55,24 +52,13 @@ interface CodeRecord {
   codeChallenge: string;
   userAddress: string;
   redirectUri: string;
-}
-
-interface TokenRecord {
-  clientId: string;
-  scopes: string[];
-  expiresAt: number;
-  userAddress: string;
+  signerKey: string;
 }
 
 export class SnapshotOAuthProvider implements OAuthServerProvider {
-  private _clientsStore = new ClientsStore();
+  clientsStore = clientsStore;
   private pendingSessions = new Map<string, PendingSession>();
   private codes = new Map<string, CodeRecord>();
-  private tokens = new Map<string, TokenRecord>();
-
-  get clientsStore(): OAuthRegisteredClientsStore {
-    return this._clientsStore;
-  }
 
   async authorize(
     client: OAuthClientInformationFull,
@@ -80,19 +66,22 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     res: Response
   ): Promise<void> {
     const sessionId = randomUUID();
+    const { signerKey, signerAddress } = await createFreshAccount();
+
     this.pendingSessions.set(sessionId, {
       redirectUri: params.redirectUri,
       state: params.state,
       codeChallenge: params.codeChallenge,
-      clientId: client.client_id
+      clientId: client.client_id,
+      signerKey,
+      signerAddress
     });
 
-    const alias = await (await getWallet()).getAddress();
     const baseUrl =
       process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? 8080}`;
     const callbackUrl = `${baseUrl}/auth/callback?session=${sessionId}`;
 
-    const snapshotUrl = `https://snapshot.box/#/settings/alias/authorize/${alias}?redirect_uri=${encodeURIComponent(callbackUrl)}`;
+    const snapshotUrl = `https://snapshot.box/#/settings/alias/authorize/${signerAddress}?redirect_uri=${encodeURIComponent(callbackUrl)}`;
     res.redirect(snapshotUrl);
   }
 
@@ -115,19 +104,13 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
       throw new Error('Client mismatch');
     this.codes.delete(authorizationCode);
 
-    const accessToken = randomUUID();
-    this.tokens.set(accessToken, {
-      clientId: client.client_id,
-      scopes: [],
-      expiresAt: Math.floor(Date.now() / 1000) + TOKEN_TTL,
-      userAddress: record.userAddress
+    const accessToken = await signAccessToken({
+      userAddress: record.userAddress,
+      signerKey: record.signerKey,
+      clientId: client.client_id
     });
 
-    return {
-      access_token: accessToken,
-      token_type: 'bearer',
-      expires_in: TOKEN_TTL
-    };
+    return { access_token: accessToken, token_type: 'bearer' };
   }
 
   async exchangeRefreshToken(): Promise<OAuthTokens> {
@@ -135,39 +118,35 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const record = this.tokens.get(token);
-    if (!record) throw new Error('Invalid token');
-    if (record.expiresAt < Date.now() / 1000) {
-      this.tokens.delete(token);
-      throw new Error('Token expired');
-    }
+    const payload = await verifyTokenSig(token);
     return {
       token,
-      clientId: record.clientId,
-      scopes: record.scopes,
-      expiresAt: record.expiresAt,
-      extra: { userAddress: record.userAddress }
+      clientId: payload.clientId,
+      scopes: [],
+      // SDK's bearerAuth middleware requires a valid expiresAt; tokens never
+      // actually expire (only invalidated by JWT_SECRET rotation), so use
+      // a far-future timestamp.
+      expiresAt: Math.floor(Date.now() / 1000) + 100 * 365 * 24 * 3600,
+      extra: {
+        userAddress: payload.userAddress,
+        signerKey: payload.signerKey
+      }
     };
   }
 
-  async revokeToken(
-    _client: OAuthClientInformationFull,
-    request: OAuthTokenRevocationRequest
-  ): Promise<void> {
-    this.tokens.delete(request.token);
+  async revokeToken(): Promise<void> {
+    // no-op: stateless tokens can't be revoked without a deny-list
   }
 
-  // Called by the /auth/callback handler
   async handleCallback(sessionId: string): Promise<string> {
     const session = this.pendingSessions.get(sessionId);
     if (!session) throw new Error('Unknown session');
 
-    const alias = await (await getWallet()).getAddress();
     const result = await gql(
       `query Aliases($where: AliasWhere) {
         aliases(first: 1, skip: 0, where: $where) { address }
       }`,
-      { where: { alias } }
+      { where: { alias: session.signerAddress } }
     );
     const userAddress = ((result as any)?.aliases ?? [])[0]?.address;
     if (!userAddress) throw new Error('Alias not authorized');
@@ -177,7 +156,8 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
       clientId: session.clientId,
       codeChallenge: session.codeChallenge,
       userAddress,
-      redirectUri: session.redirectUri
+      redirectUri: session.redirectUri,
+      signerKey: session.signerKey
     });
     this.pendingSessions.delete(sessionId);
 
@@ -186,20 +166,14 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     if (session.state) url.searchParams.set('state', session.state);
     return url.toString();
   }
-}
 
-// Express handler for GET /auth/callback
-export function authCallbackHandler(provider: SnapshotOAuthProvider) {
-  return async (req: Request, res: Response) => {
+  callback = async (req: Request, res: Response): Promise<void> => {
     const sessionId = req.query.session as string | undefined;
     if (!sessionId) return void res.status(400).send('Missing session');
-
     try {
-      const redirectUrl = await provider.handleCallback(sessionId);
-      res.redirect(redirectUrl);
+      res.redirect(await this.handleCallback(sessionId));
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      res.status(400).send(message);
+      res.status(400).send(e instanceof Error ? e.message : String(e));
     }
   };
 }

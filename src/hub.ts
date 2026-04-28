@@ -33,7 +33,7 @@ export function toContent(result: unknown) {
 
 export function toError(e: unknown) {
   const message = e instanceof Error ? e.message : String(e);
-  console.error('[snapshot-mcp]', message);
+  console.error(message);
 
   return {
     content: [{ type: 'text' as const, text: `Error: ${message}` }],

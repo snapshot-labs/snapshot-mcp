@@ -122,26 +122,29 @@ Copy `.env.example` to `.env` and configure:
 | `SEARCH_API_URL` | Search service endpoint (default `https://search.snapshot.box`) |
 | `PORT` | HTTP server port (default: `8080`) |
 | `BASE_URL` | Public URL for OAuth metadata (e.g. `https://mcp.snapshot.box`) |
-| `ALIAS_PRIVATE_KEY` | Private key for the alias wallet (option 1) |
-| `CDP_API_KEY_ID` | Coinbase CDP API key ID (option 2) |
-| `CDP_API_KEY_SECRET` | Coinbase CDP API key secret (option 2) |
-| `CDP_WALLET_SECRET` | Coinbase CDP wallet secret (option 2) |
+| `JWT_SECRET` | HS256 secret used to sign access tokens — **required for HTTP mode** (≥32 chars; `openssl rand -hex 32`) |
+| `CDP_API_KEY_ID` | Coinbase CDP API key ID — **required for HTTP mode** |
+| `CDP_API_KEY_SECRET` | Coinbase CDP API key secret — **required for HTTP mode** |
+| `CDP_WALLET_SECRET` | Coinbase CDP wallet secret — **required for HTTP mode** |
+| `ALIAS_PRIVATE_KEY` | Single private key — **stdio mode only** (ignored by HTTP server) |
 
-Wallet configuration is optional. Without it, only `snapshot-schema`, `snapshot-query`, and `snapshot-search` are available.
+The HTTP server requires CDP credentials and a JWT secret. Each user who connects via OAuth gets their own CDP-managed alias wallet, so votes can only be signed by the user who authorized the specific alias. Access tokens are stateless JWTs (HS256) signed with `JWT_SECRET`; rotating that secret invalidates every issued token.
 
 ## Auth flow
 
 ### HTTP (Claude Desktop / Claude.ai) — OAuth 2.0
 
-When a wallet is configured, the HTTP server exposes OAuth 2.0 endpoints. Claude Desktop and Claude.ai will show a **"Connect" button** that triggers the flow automatically:
+The HTTP server exposes OAuth 2.0 endpoints. Claude Desktop and Claude.ai will show a **"Connect" button** that triggers the flow automatically:
 
 1. Claude redirects to `/authorize`
-2. Server redirects to `snapshot.box/#/settings/alias/authorize/<alias>` with a callback URL
-3. User authorizes the alias on Snapshot
+2. Server mints a fresh per-session CDP alias wallet and redirects to `snapshot.box/#/settings/alias/authorize/<alias>` with a callback URL
+3. User authorizes that alias on Snapshot
 4. Snapshot redirects back to `/auth/callback`
-5. Server verifies authorization, generates an auth code, and redirects back to Claude
-6. Claude exchanges the code for an access token at `/token`
-7. All subsequent requests include the token — tools resolve the user automatically
+5. Server resolves the authorizing user from the alias, generates an auth code, and redirects back to Claude
+6. Claude exchanges the code for a JWT (HS256) access token at `/token`
+7. All subsequent requests include the token — the server verifies the signature and reads the user and their CDP account from the claims
+
+Each user gets their own CDP alias, so one user cannot sign votes on behalf of another. Tokens are self-verifiable and survive server restarts (until `JWT_SECRET` rotates).
 
 ### Stdio (local)
 
@@ -153,6 +156,7 @@ When a wallet is configured, the HTTP server exposes OAuth 2.0 endpoints. Claude
 
 ```bash
 bun dev      # watch mode
+bun test     # run security tests
 bun lint     # ESLint
 bun format   # Prettier
 ```
