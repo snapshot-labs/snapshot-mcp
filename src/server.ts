@@ -146,7 +146,15 @@ export function createMcpServer({
             metadataUri: ''
           }
         });
-        return sx.send(envelope);
+        const result = (await sx.send(envelope)) as { id?: string };
+        return {
+          result,
+          links: {
+            voter: `https://snapshot.box/#/profile/${from}`,
+            space: `https://snapshot.box/#/${data.space}`,
+            proposal: `https://snapshot.box/#/${data.space}/proposal/${data.proposal}`
+          }
+        };
       })
   );
 
