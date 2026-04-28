@@ -25,7 +25,7 @@ export async function gql(query: string, variables?: Record<string, unknown>) {
   return json.data;
 }
 
-export async function resolveUserAddressFromAlias(
+export async function resolveUserFromAlias(
   alias: string
 ): Promise<string | undefined> {
   const result = await gql(

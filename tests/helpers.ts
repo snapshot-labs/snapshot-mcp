@@ -25,7 +25,7 @@ mock.module('../src/wallet.ts', () => ({
 
 mock.module('../src/hub.ts', () => ({
   gql: async (q: string, v?: any) => gqlHandler(q, v),
-  resolveUserAddressFromAlias: async (alias: string) => {
+  resolveUserFromAlias: async (alias: string) => {
     const result = (await gqlHandler('aliases', {
       where: { alias }
     })) as { aliases?: { address: string }[] };

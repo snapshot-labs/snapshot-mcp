@@ -7,7 +7,7 @@ import { SignJWT } from 'jose';
 import { verifyAccessToken } from '../src/auth.js';
 
 const PAYLOAD = {
-  userAddress: '0x000000000000000000000000000000000000aaaa',
+  user: '0x000000000000000000000000000000000000aaaa',
   signerKey: 's-fixture',
   clientId: 'client-fixture'
 };
@@ -22,7 +22,7 @@ describe('access token security', () => {
       nonce: 'attacker-nonce'
     })
       .setProtectedHeader({ alg: 'HS256' })
-      .setSubject(PAYLOAD.userAddress)
+      .setSubject(PAYLOAD.user)
       .setAudience(PAYLOAD.clientId)
       .setIssuedAt()
       .sign(attackerSecret);

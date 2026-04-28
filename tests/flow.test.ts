@@ -59,18 +59,14 @@ describe('end-to-end OAuth flow security', () => {
       codeB
     );
 
-    expect((await verifyAccessToken(tokensA.access_token)).userAddress).toBe(
-      userA
-    );
-    expect((await verifyAccessToken(tokensB.access_token)).userAddress).toBe(
-      userB
-    );
+    expect((await verifyAccessToken(tokensA.access_token)).user).toBe(userA);
+    expect((await verifyAccessToken(tokensB.access_token)).user).toBe(userB);
 
     expect(tokensA.access_token).not.toBe(tokensB.access_token);
 
-    // Headline cross-user attack: take token A, swap the userAddress (sub
-    // claim) in the payload to user B's, present for verification. JWT
-    // signature must catch the tamper.
+    // Headline cross-user attack: take token A, swap the user (sub claim)
+    // in the payload to user B's, present for verification. JWT signature
+    // must catch the tamper.
     const [header, payload, sig] = tokensA.access_token.split('.');
     const claims = JSON.parse(Buffer.from(payload, 'base64url').toString());
     claims.sub = userB;
@@ -91,7 +87,7 @@ describe('end-to-end OAuth flow security', () => {
       code
     );
 
-    expect((await verifyAccessToken(oldToken)).userAddress).toBe(userA);
+    expect((await verifyAccessToken(oldToken)).user).toBe(userA);
 
     process.env.JWT_SECRET = 'rotated-secret-also-32-chars-or-more-please-yes';
 

@@ -11,7 +11,7 @@ import {
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { Request, Response } from 'express';
 import { JWTPayload, jwtVerify, SignJWT } from 'jose';
-import { resolveUserAddressFromAlias } from './hub.js';
+import { resolveUserFromAlias } from './hub.js';
 import { createFreshAccount } from './wallet.js';
 
 const ALG = 'HS256';
@@ -48,12 +48,12 @@ async function verify(token: string): Promise<JWTPayload> {
 }
 
 export async function signAccessToken(payload: {
-  userAddress: string;
+  user: string;
   signerKey: string;
   clientId: string;
 }): Promise<string> {
   return sign({
-    sub: payload.userAddress,
+    sub: payload.user,
     aud: payload.clientId,
     signerKey: payload.signerKey
   });
@@ -65,7 +65,7 @@ export async function verifyAccessToken(token: string) {
     throw new Error('Invalid token');
   }
   return {
-    userAddress: p.sub as string,
+    user: p.sub as string,
     signerKey: p.signerKey,
     clientId: p.aud as string,
     issuedAt: p.iat as number,
@@ -109,7 +109,7 @@ interface Session {
   signerKey: string;
   state?: string;
   signerAddress?: string;
-  userAddress?: string;
+  user?: string;
 }
 
 export class SnapshotOAuthProvider implements OAuthServerProvider {
@@ -162,7 +162,7 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     this.codes.delete(authorizationCode);
 
     const accessToken = await signAccessToken({
-      userAddress: record.userAddress!,
+      user: record.user!,
       signerKey: record.signerKey,
       clientId: client.client_id
     });
@@ -185,7 +185,7 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
       // a far-future timestamp.
       expiresAt: Math.floor(Date.now() / 1000) + 100 * 365 * 24 * 3600,
       extra: {
-        userAddress: payload.userAddress,
+        user: payload.user,
         signerKey: payload.signerKey
       }
     };
@@ -195,13 +195,11 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     const session = this.pendingSessions.get(sessionId);
     if (!session) throw new Error('Unknown session');
 
-    const userAddress = await resolveUserAddressFromAlias(
-      session.signerAddress!
-    );
-    if (!userAddress) throw new Error('Alias not authorized');
+    const user = await resolveUserFromAlias(session.signerAddress!);
+    if (!user) throw new Error('Alias not authorized');
 
     const code = randomUUID();
-    this.codes.set(code, { ...session, userAddress });
+    this.codes.set(code, { ...session, user });
     this.pendingSessions.delete(sessionId);
 
     const url = new URL(session.redirectUri);

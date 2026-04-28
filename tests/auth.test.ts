@@ -11,7 +11,7 @@ import { SnapshotOAuthProvider } from '../src/auth.js';
 
 async function driveAuthCodeFlow(
   provider: SnapshotOAuthProvider,
-  userAddress: string,
+  user: string,
   opts: { client?: any; codeChallenge?: string } = {}
 ) {
   const { client, aliasAddress, sessionId } = await startAuthFlow(
@@ -23,7 +23,7 @@ async function driveAuthCodeFlow(
   setGqlHandler((_q, vars) => {
     const aliasInQuery = (vars as any)?.where?.alias;
     if (aliasInQuery?.toLowerCase() === aliasAddress.toLowerCase()) {
-      return { aliases: [{ address: userAddress }] };
+      return { aliases: [{ address: user }] };
     }
     return { aliases: [] };
   });

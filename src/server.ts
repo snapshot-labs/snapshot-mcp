@@ -3,7 +3,7 @@ import { clients, offchainMainnet } from '@snapshot-labs/sx';
 import { z } from 'zod';
 import {
   gql,
-  resolveUserAddressFromAlias,
+  resolveUserFromAlias,
   schemaCache,
   toContent,
   toError
@@ -23,19 +23,31 @@ async function handle(fn: () => Promise<unknown>) {
   }
 }
 
+const SERVER_INSTRUCTIONS = `Snapshot governance MCP. The authenticated user's address is auto-injected as the \`$user\` GraphQL variable on every snapshot-query call — reference it directly in your queries; do not pass it as a literal.
+
+To find proposals the current user can act on:
+1. snapshot-query with \`follows(where: { follower: $user })\` to list spaces they follow.
+2. Then \`proposals(where: { space_in: [...spaceIds], state: "active" })\` to list currently-open proposals.
+3. To confirm the user can actually vote on one, query \`vp(voter: $user, space: <spaceId>, proposal: <proposalId>)\` — voting power is evaluated at \`proposal.snapshot\` (the block when the proposal was created), not now.
+
+A vote will only succeed if the proposal is \`state: "active"\` and the user's \`vp.vp > 0\` at that snapshot block.`;
+
 export function createMcpServer({
   mode = 'stdio'
 }: { mode?: 'http' | 'stdio' } = {}): McpServer {
-  const server = new McpServer({ name: 'snapshot', version: '0.1.0' });
+  const server = new McpServer(
+    { name: 'snapshot', version: '0.1.0' },
+    { instructions: SERVER_INSTRUCTIONS }
+  );
 
   async function resolveContext(extra?: Record<string, unknown>) {
-    const { userAddress, signerKey } =
+    const { user, signerKey } =
       ((extra?.authInfo as any)?.extra as
-        | { userAddress?: string; signerKey?: string }
+        | { user?: string; signerKey?: string }
         | undefined) ?? {};
 
-    if (userAddress && signerKey) {
-      return { userAddress, signer: await getWalletForUser(signerKey) };
+    if (user && signerKey) {
+      return { user, signer: await getWalletForUser(signerKey) };
     }
 
     if (mode === 'http') {
@@ -46,13 +58,13 @@ export function createMcpServer({
 
     const signer = getStdioWallet();
     const alias = await signer.getAddress();
-    const resolved = await resolveUserAddressFromAlias(alias);
+    const resolved = await resolveUserFromAlias(alias);
     if (!resolved) {
       throw new Error(
         `Not authorized. Visit https://snapshot.box/#/settings/alias/authorize/${alias} to authorize, then retry.`
       );
     }
-    return { userAddress: resolved, signer };
+    return { user: resolved, signer };
   }
 
   server.registerTool(
@@ -69,7 +81,7 @@ export function createMcpServer({
     'snapshot-query',
     {
       description:
-        'Execute any GraphQL query against the Snapshot API. Use snapshot-schema first to discover available queries, filters, and fields.',
+        "Execute any GraphQL query against the Snapshot API. The authenticated user's address is auto-bound as `$user` — reference it directly. Use snapshot-schema first to discover available queries, filters, and fields. Useful queries: `follows` (spaces a user follows), `proposals` (filter by `state` and `space_in`), `vp` (voting power for a voter on a specific proposal — evaluated at the proposal's snapshot block).",
       inputSchema: {
         query: z.string().describe('GraphQL query string'),
         variables: z
@@ -78,14 +90,23 @@ export function createMcpServer({
           .describe('GraphQL variables')
       }
     },
-    ({ query, variables }) => handle(() => gql(query, variables))
+    ({ query, variables }, extra) =>
+      handle(async () => {
+        let user: string | undefined;
+        try {
+          ({ user } = await resolveContext(extra));
+        } catch {
+          // anonymous read-only queries are still allowed
+        }
+        return gql(query, user ? { user, ...variables } : variables);
+      })
   );
 
   server.registerTool(
     'snapshot-vote',
     {
       description:
-        'Cast a vote on a Snapshot proposal. Automatically resolves the authorized user. If not yet authorized, returns the authorization URL for the user to visit. Always fetch the proposal first with snapshot-query to confirm it is active and to get the correct voting type and choices.',
+        'Cast a vote on a Snapshot proposal. Preconditions: (a) the proposal must currently be in `state: "active"` — votes on `pending` or `closed` proposals are rejected by the hub; (b) the user must have voting power at the proposal\'s snapshot block, queryable via `vp(voter: $user, space, proposal)` on the GraphQL API. Always run snapshot-query first to fetch `state`, `type`, `choices`, `snapshot`, `space.id` and confirm `vp.vp > 0` for the voter. If not yet authorized, this tool returns the authorization URL for the user to visit.',
       inputSchema: {
         space: z.string().describe('Space ID (e.g. "ens.eth")'),
         proposal: z.string().describe('Proposal ID (hex string)'),
@@ -110,7 +131,7 @@ export function createMcpServer({
     },
     (data, extra) =>
       handle(async () => {
-        const { userAddress: from, signer } = await resolveContext(extra);
+        const { user: from, signer } = await resolveContext(extra);
         const envelope = await sx.vote({
           signer: signer as any,
           data: {
