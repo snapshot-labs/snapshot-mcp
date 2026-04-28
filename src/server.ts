@@ -23,7 +23,7 @@ async function handle(fn: () => Promise<unknown>) {
   }
 }
 
-const SERVER_INSTRUCTIONS = `Snapshot governance MCP. The authenticated user's address is auto-injected as the \`$user\` GraphQL variable on every snapshot-query call — reference it directly in your queries; do not pass it as a literal.
+const SERVER_INSTRUCTIONS = `Snapshot governance MCP. The authenticated user's address is auto-injected as the \`$user\` GraphQL variable on every snapshot-query call. Declare it in your operation (e.g. \`query Foo($user: String!) { ... }\`) and reference \`$user\` in the query body — but do NOT include \`user\` in the \`variables\` map you send; the server supplies its value automatically and will overwrite anything you pass.
 
 To find proposals the current user can act on:
 1. snapshot-query with \`follows(where: { follower: $user })\` to list spaces they follow.
@@ -81,7 +81,7 @@ export function createMcpServer({
     'snapshot-query',
     {
       description:
-        "Execute any GraphQL query against the Snapshot API. The authenticated user's address is auto-bound as `$user` — reference it directly. Use snapshot-schema first to discover available queries, filters, and fields. Useful queries: `follows` (spaces a user follows), `proposals` (filter by `state` and `space_in`), `vp` (voting power for a voter on a specific proposal — evaluated at the proposal's snapshot block).",
+        "Execute any GraphQL query against the Snapshot API. The authenticated user's address is auto-bound as `$user`: declare it in your operation (`query Foo($user: String!) { ... }`) and reference `$user` in the query body, but do NOT include `user` in the `variables` map (the server fills it in and overwrites anything you pass). Use snapshot-schema first to discover available queries, filters, and fields. Useful queries: `follows` (spaces a user follows), `proposals` (filter by `state` and `space_in`), `vp` (voting power for a voter on a specific proposal — evaluated at the proposal's snapshot block).",
       inputSchema: {
         query: z.string().describe('GraphQL query string'),
         variables: z
@@ -98,7 +98,7 @@ export function createMcpServer({
         } catch {
           // anonymous read-only queries are still allowed
         }
-        return gql(query, user ? { user, ...variables } : variables);
+        return gql(query, user ? { ...variables, user } : variables);
       })
   );
 
