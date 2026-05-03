@@ -150,7 +150,7 @@ export function createMcpServer({
     'snapshot-vote',
     {
       description:
-        'Cast a vote on a Snapshot proposal. Preconditions: (a) the proposal must currently be in `state: "active"`; votes on `pending` or `closed` proposals are rejected by the hub. (b) the user must have voting power at the proposal\'s snapshot block, queryable via `vp(voter: $user, space, proposal)` on the GraphQL API. Always run snapshot-query first to fetch `state`, `type`, `choices`, `snapshot`, `privacy`, `space.id` and confirm `vp.vp > 0` for the voter. If the proposal\'s `privacy` is `"shutter"`, pass `privacy: "shutter"` so the choice is encrypted until the proposal closes. If not yet authorized, this tool returns the authorization URL for the user to visit.',
+        'Cast a vote on a Snapshot proposal. The proposal\'s `type` and `privacy` are fetched from the hub and applied automatically; shutter-encrypted proposals also strip the reason. Preconditions: the proposal must be in `state: "active"`, and the user must have voting power at `proposal.snapshot` (check via `vp(voter: $user, space, proposal)`). If not yet authorized, this tool returns the authorization URL for the user to visit.',
       inputSchema: {
         space: z.string().describe('Space ID (e.g. "ens.eth")'),
         proposal: z.string().describe('Proposal ID (hex string)'),
@@ -159,35 +159,32 @@ export function createMcpServer({
           .describe(
             'Vote choice. Number for single-choice/basic, array for approval/ranked-choice, object for weighted/quadratic'
           ),
-        reason: z.string().default('').describe('Reason for the vote'),
-        type: z
-          .enum([
-            'basic',
-            'single-choice',
-            'approval',
-            'ranked-choice',
-            'weighted',
-            'quadratic'
-          ])
-          .default('basic')
-          .describe('Voting type (defaults to "basic")'),
-        privacy: z
-          .enum(['none', 'shutter'])
-          .default('none')
+        reason: z
+          .string()
+          .default('')
           .describe(
-            'Privacy mode. "shutter" encrypts the choice via the Shutter network until the proposal closes. Must match the proposal\'s `privacy` field.'
+            'Reason for the vote (ignored on shutter-encrypted proposals)'
           )
       }
     },
     (data, extra) =>
       handle(async () => {
         const { user: from, signer } = await resolveContext(extra);
-        if (data.privacy === 'shutter') await ensureShutterReady();
+        const { proposal } = (await gql(
+          'query ($id: String!) { proposal(id: $id) { type privacy } }',
+          { id: data.proposal }
+        )) as { proposal: { type: string; privacy: string } | null };
+        if (!proposal) throw new Error(`Proposal not found: ${data.proposal}`);
+        const privacy = proposal.privacy === 'shutter' ? 'shutter' : 'none';
+        if (privacy === 'shutter') await ensureShutterReady();
         const envelope = await sx.vote({
           signer: signer as any,
           data: {
             ...data,
             from,
+            type: proposal.type as any,
+            privacy,
+            reason: privacy === 'shutter' ? '' : data.reason,
             app: 'snapshot-mcp',
             authenticator: '',
             strategies: [],
