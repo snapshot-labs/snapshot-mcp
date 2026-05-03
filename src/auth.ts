@@ -16,9 +16,6 @@ import { createFreshAccount } from './wallet.js';
 
 const ALG = 'HS256';
 
-let cachedSecret: Uint8Array | null = null;
-let cachedSecretSource: string | null = null;
-
 function getSecret(): Uint8Array {
   const raw = process.env.JWT_SECRET;
   if (!raw || raw.length < 32) {
@@ -26,18 +23,15 @@ function getSecret(): Uint8Array {
       'JWT_SECRET must be set and at least 32 characters. Generate one with: openssl rand -hex 32'
     );
   }
-  if (raw !== cachedSecretSource) {
-    cachedSecret = new TextEncoder().encode(raw);
-    cachedSecretSource = raw;
-  }
-  return cachedSecret!;
+  return new TextEncoder().encode(raw);
 }
 
-async function sign(claims: JWTPayload): Promise<string> {
-  return new SignJWT({ ...claims, nonce: randomUUID() })
+async function sign(claims: JWTPayload, exp?: string): Promise<string> {
+  const jwt = new SignJWT({ ...claims, nonce: randomUUID() })
     .setProtectedHeader({ alg: ALG })
-    .setIssuedAt()
-    .sign(getSecret());
+    .setIssuedAt();
+  if (exp) jwt.setExpirationTime(exp);
+  return jwt.sign(getSecret());
 }
 
 async function verify(token: string): Promise<JWTPayload> {
@@ -52,35 +46,28 @@ export async function signAccessToken(payload: {
   signerKey: string;
   clientId: string;
 }): Promise<string> {
-  return sign({
-    sub: payload.user,
-    aud: payload.clientId,
-    signerKey: payload.signerKey
-  });
+  return sign(
+    {
+      sub: payload.user,
+      aud: payload.clientId,
+      signerKey: payload.signerKey
+    },
+    '1y'
+  );
 }
 
-export async function verifyAccessToken(token: string) {
-  const p = await verify(token);
-  if (!p.sub || !p.aud || typeof p.signerKey !== 'string') {
-    throw new Error('Invalid token');
-  }
-  return {
-    user: p.sub as string,
-    signerKey: p.signerKey,
-    clientId: p.aud as string,
-    issuedAt: p.iat as number,
-    nonce: p.nonce as string
-  };
+type ClientMetadata = Omit<OAuthClientInformationFull, 'client_id'>;
+
+async function signClientId(metadata: ClientMetadata): Promise<string> {
+  return sign({ metadata });
 }
 
-async function signClientId(metadata: unknown): Promise<string> {
-  return sign({ metadata: JSON.stringify(metadata) });
-}
-
-async function verifyClientId(clientId: string): Promise<any> {
+async function verifyClientId(clientId: string): Promise<ClientMetadata> {
   const p = await verify(clientId);
-  if (typeof p.metadata !== 'string') throw new Error('Invalid client_id');
-  return JSON.parse(p.metadata);
+  if (!p.metadata || typeof p.metadata !== 'object') {
+    throw new Error('Invalid client_id');
+  }
+  return p.metadata as ClientMetadata;
 }
 
 const clientsStore: OAuthRegisteredClientsStore = {
@@ -107,15 +94,15 @@ interface Session {
   codeChallenge: string;
   redirectUri: string;
   signerKey: string;
+  signerAddress: string;
   state?: string;
-  signerAddress?: string;
-  user?: string;
 }
+type CodeSession = Session & { user: string };
 
 export class SnapshotOAuthProvider implements OAuthServerProvider {
   clientsStore = clientsStore;
   private pendingSessions = new Map<string, Session>();
-  private codes = new Map<string, Session>();
+  private codes = new Map<string, CodeSession>();
 
   async authorize(
     client: OAuthClientInformationFull,
@@ -162,7 +149,7 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     this.codes.delete(authorizationCode);
 
     const accessToken = await signAccessToken({
-      user: record.user!,
+      user: record.user,
       signerKey: record.signerKey,
       clientId: client.client_id
     });
@@ -175,18 +162,23 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const payload = await verifyAccessToken(token);
+    const p = await verify(token);
+    if (
+      !p.sub ||
+      !p.aud ||
+      typeof p.signerKey !== 'string' ||
+      typeof p.exp !== 'number'
+    ) {
+      throw new Error('Invalid token');
+    }
     return {
       token,
-      clientId: payload.clientId,
+      clientId: p.aud as string,
       scopes: [],
-      // SDK's bearerAuth middleware requires a valid expiresAt; tokens never
-      // actually expire (only invalidated by JWT_SECRET rotation), so use
-      // a far-future timestamp.
-      expiresAt: Math.floor(Date.now() / 1000) + 100 * 365 * 24 * 3600,
+      expiresAt: p.exp,
       extra: {
-        user: payload.user,
-        signerKey: payload.signerKey
+        user: p.sub as string,
+        signerKey: p.signerKey
       }
     };
   }
@@ -195,7 +187,7 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     const session = this.pendingSessions.get(sessionId);
     if (!session) throw new Error('Unknown session');
 
-    const user = await resolveUserFromAlias(session.signerAddress!);
+    const user = await resolveUserFromAlias(session.signerAddress);
     if (!user) throw new Error('Alias not authorized');
 
     const code = randomUUID();

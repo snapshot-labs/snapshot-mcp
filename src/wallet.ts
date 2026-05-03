@@ -1,6 +1,5 @@
 import { randomBytes } from 'node:crypto';
 import { CdpClient } from '@coinbase/cdp-sdk';
-import { Wallet } from '@ethersproject/wallet';
 
 const POLICY_DESCRIPTION = 'snapshot mcp vote only v1';
 
@@ -117,14 +116,4 @@ export async function createFreshAccount(): Promise<{
     accountPolicy
   });
   return { signerKey, signerAddress: account.address };
-}
-
-export function getStdioWallet(): Wallet {
-  const privateKey = process.env.ALIAS_PRIVATE_KEY;
-  if (!privateKey) {
-    throw new Error(
-      'ALIAS_PRIVATE_KEY is required for stdio mode. Set it in .env.'
-    );
-  }
-  return new Wallet(privateKey);
 }

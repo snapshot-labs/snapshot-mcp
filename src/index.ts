@@ -30,19 +30,18 @@ const handlePost = async (req: any, res: any) => {
   }
 
   if (!sessionId && isInitializeRequest(req.body)) {
-    const holder: { transport?: StreamableHTTPServerTransport } = {};
-    holder.transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sid: string) => {
-        transports.set(sid, holder.transport!);
-      }
-    });
-    holder.transport.onclose = () => {
-      if (holder.transport?.sessionId)
-        transports.delete(holder.transport.sessionId);
+    const transport: StreamableHTTPServerTransport =
+      new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: sid => {
+          transports.set(sid, transport);
+        }
+      });
+    transport.onclose = () => {
+      if (transport.sessionId) transports.delete(transport.sessionId);
     };
-    await createMcpServer({ mode: 'http' }).connect(holder.transport);
-    await holder.transport.handleRequest(req, res, req.body);
+    await createMcpServer({ mode: 'http' }).connect(transport);
+    await transport.handleRequest(req, res, req.body);
     return;
   }
 

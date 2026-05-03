@@ -1,15 +1,20 @@
+import { Wallet } from '@ethersproject/wallet';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { clients, offchainMainnet } from '@snapshot-labs/sx';
 import { z } from 'zod';
-import {
-  gql,
-  resolveUserFromAlias,
-  schemaCache,
-  toContent,
-  toError
-} from './hub.js';
+import { gql, resolveUserFromAlias, schemaCache } from './hub.js';
 import { search } from './search.js';
-import { getStdioWallet, getWalletForUser } from './wallet.js';
+import { getWalletForUser } from './wallet.js';
+
+function getStdioWallet(): Wallet {
+  const privateKey = process.env.ALIAS_PRIVATE_KEY;
+  if (!privateKey) {
+    throw new Error(
+      'ALIAS_PRIVATE_KEY is required for stdio mode. Set it in .env.'
+    );
+  }
+  return new Wallet(privateKey);
+}
 
 const sx = new clients.OffchainEthereumSig({
   networkConfig: offchainMainnet
@@ -17,9 +22,19 @@ const sx = new clients.OffchainEthereumSig({
 
 async function handle(fn: () => Promise<unknown>) {
   try {
-    return toContent(await fn());
+    const result = await fn();
+    return {
+      content: [
+        { type: 'text' as const, text: JSON.stringify(result, null, 2) }
+      ]
+    };
   } catch (e) {
-    return toError(e);
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(message);
+    return {
+      content: [{ type: 'text' as const, text: `Error: ${message}` }],
+      isError: true
+    };
   }
 }
 
@@ -115,7 +130,7 @@ export function createMcpServer({
           .describe(
             'Vote choice — number for single-choice/basic, array for approval/ranked-choice, object for weighted/quadratic'
           ),
-        reason: z.string().optional().describe('Reason for the vote'),
+        reason: z.string().default('').describe('Reason for the vote'),
         type: z
           .enum([
             'basic',
@@ -125,7 +140,7 @@ export function createMcpServer({
             'weighted',
             'quadratic'
           ])
-          .optional()
+          .default('basic')
           .describe('Voting type (defaults to "basic")')
       }
     },
@@ -137,8 +152,6 @@ export function createMcpServer({
           data: {
             ...data,
             from,
-            reason: data.reason ?? '',
-            type: data.type ?? 'basic',
             privacy: 'none',
             app: 'snapshot-mcp',
             authenticator: '',

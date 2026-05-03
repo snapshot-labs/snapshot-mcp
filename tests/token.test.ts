@@ -4,13 +4,15 @@
 import './helpers.js';
 import { describe, expect, test } from 'bun:test';
 import { SignJWT } from 'jose';
-import { verifyAccessToken } from '../src/auth.js';
+import { SnapshotOAuthProvider } from '../src/auth.js';
 
 const PAYLOAD = {
   user: '0x000000000000000000000000000000000000aaaa',
   signerKey: 's-fixture',
   clientId: 'client-fixture'
 };
+
+const provider = new SnapshotOAuthProvider();
 
 describe('access token security', () => {
   test('token signed with a different secret is rejected', async () => {
@@ -26,13 +28,13 @@ describe('access token security', () => {
       .setAudience(PAYLOAD.clientId)
       .setIssuedAt()
       .sign(attackerSecret);
-    expect(verifyAccessToken(forged)).rejects.toThrow();
+    expect(provider.verifyAccessToken(forged)).rejects.toThrow();
   });
 
   test('malformed tokens throw rather than silently parsing as garbage', () => {
-    expect(verifyAccessToken('')).rejects.toThrow();
-    expect(verifyAccessToken('not-a-jwt')).rejects.toThrow();
-    expect(verifyAccessToken('a.b')).rejects.toThrow();
-    expect(verifyAccessToken('a.b.c.d')).rejects.toThrow();
+    expect(provider.verifyAccessToken('')).rejects.toThrow();
+    expect(provider.verifyAccessToken('not-a-jwt')).rejects.toThrow();
+    expect(provider.verifyAccessToken('a.b')).rejects.toThrow();
+    expect(provider.verifyAccessToken('a.b.c.d')).rejects.toThrow();
   });
 });

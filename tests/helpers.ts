@@ -19,8 +19,7 @@ mock.module('../src/wallet.ts', () => ({
       signerKey: `s-${w.address.slice(2, 18).toLowerCase()}`,
       signerAddress: w.address
     };
-  },
-  getStdioWallet: () => Wallet.createRandom()
+  }
 }));
 
 mock.module('../src/hub.ts', () => ({
@@ -31,14 +30,7 @@ mock.module('../src/hub.ts', () => ({
     })) as { aliases?: { address: string }[] };
     return (result?.aliases ?? [])[0]?.address;
   },
-  schemaCache: Promise.resolve({}),
-  toContent: (r: unknown) => ({
-    content: [{ type: 'text', text: JSON.stringify(r) }]
-  }),
-  toError: (e: unknown) => ({
-    content: [{ type: 'text', text: String(e) }],
-    isError: true
-  })
+  schemaCache: Promise.resolve({})
 }));
 
 export function makeRes() {

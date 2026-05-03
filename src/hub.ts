@@ -37,22 +37,6 @@ export async function resolveUserFromAlias(
   return ((result as any)?.aliases ?? [])[0]?.address;
 }
 
-export function toContent(result: unknown) {
-  return {
-    content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }]
-  };
-}
-
-export function toError(e: unknown) {
-  const message = e instanceof Error ? e.message : String(e);
-  console.error(message);
-
-  return {
-    content: [{ type: 'text' as const, text: `Error: ${message}` }],
-    isError: true
-  };
-}
-
 const BUILTIN_TYPES = new Set(['String', 'Boolean', 'Int', 'Float', 'ID']);
 
 export const schemaCache: Promise<unknown> = gql(`{

@@ -11,7 +11,7 @@
 
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { setGqlHandler, startAuthFlow } from './helpers.js';
-import { SnapshotOAuthProvider, verifyAccessToken } from '../src/auth.js';
+import { SnapshotOAuthProvider } from '../src/auth.js';
 
 describe('end-to-end OAuth flow security', () => {
   let provider: SnapshotOAuthProvider;
@@ -59,8 +59,12 @@ describe('end-to-end OAuth flow security', () => {
       codeB
     );
 
-    expect((await verifyAccessToken(tokensA.access_token)).user).toBe(userA);
-    expect((await verifyAccessToken(tokensB.access_token)).user).toBe(userB);
+    expect(
+      (await provider.verifyAccessToken(tokensA.access_token)).extra!.user
+    ).toBe(userA);
+    expect(
+      (await provider.verifyAccessToken(tokensB.access_token)).extra!.user
+    ).toBe(userB);
 
     expect(tokensA.access_token).not.toBe(tokensB.access_token);
 
@@ -71,7 +75,7 @@ describe('end-to-end OAuth flow security', () => {
     const claims = JSON.parse(Buffer.from(payload, 'base64url').toString());
     claims.sub = userB;
     const morphed = `${header}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.${sig}`;
-    expect(verifyAccessToken(morphed)).rejects.toThrow();
+    expect(provider.verifyAccessToken(morphed)).rejects.toThrow();
   });
 
   test('rotating JWT_SECRET invalidates all previously issued tokens (kill switch)', async () => {
@@ -87,10 +91,12 @@ describe('end-to-end OAuth flow security', () => {
       code
     );
 
-    expect((await verifyAccessToken(oldToken)).user).toBe(userA);
+    expect((await provider.verifyAccessToken(oldToken)).extra!.user).toBe(
+      userA
+    );
 
     process.env.JWT_SECRET = 'rotated-secret-also-32-chars-or-more-please-yes';
 
-    expect(verifyAccessToken(oldToken)).rejects.toThrow();
+    expect(provider.verifyAccessToken(oldToken)).rejects.toThrow();
   });
 });
