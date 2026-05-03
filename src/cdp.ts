@@ -1,28 +1,36 @@
 import { randomBytes } from 'node:crypto';
-import { CdpClient } from '@coinbase/cdp-sdk';
+import {
+  CdpClient,
+  type CreatePolicyBody,
+  type EvmServerAccount
+} from '@coinbase/cdp-sdk';
 
-const POLICY_DESCRIPTION = 'snapshot mcp vote only v1';
+const POLICY_DESCRIPTION = 'snapshot mcp v3';
 
-// Blast-radius reduction if CDP_WALLET_SECRET leaks: only signEvmTypedData
-// is allowed (what Snapshot votes and our access tokens need). Everything
-// else — transactions, arbitrary messages, hashes — is rejected.
+// Accept only Snapshot-domain typed data; reject all else (CDP requires a primaryType per rule).
 const POLICY_RULES = [
-  {
+  ...['signEvmTransaction', 'sendEvmTransaction'].map(operation => ({
     action: 'reject',
-    operation: 'signEvmTransaction',
+    operation,
     criteria: [{ type: 'ethValue', ethValue: '0', operator: '>=' }]
-  },
-  {
-    action: 'reject',
-    operation: 'sendEvmTransaction',
-    criteria: [{ type: 'ethValue', ethValue: '0', operator: '>=' }]
-  },
+  })),
   {
     action: 'reject',
     operation: 'signEvmMessage',
     criteria: [{ type: 'evmMessage', match: '.*' }]
   },
-  { action: 'reject', operation: 'signEvmHash' }
+  { action: 'reject', operation: 'signEvmHash' },
+  ...['Vote', 'Proposal'].map(primaryType => ({
+    action: 'accept',
+    operation: 'signEvmTypedData',
+    criteria: [
+      {
+        type: 'evmTypedDataField',
+        types: { primaryType, types: { [primaryType]: [] } },
+        conditions: [{ path: 'domain.name', match: '^snapshot$' }]
+      }
+    ]
+  }))
 ] as const;
 
 const DOMAIN_FIELD_TYPES: Record<string, string> = {
@@ -35,24 +43,25 @@ const DOMAIN_FIELD_TYPES: Record<string, string> = {
 
 export type CdpSigner = ReturnType<typeof makeCdpSigner>;
 
-function makeCdpSigner(account: any) {
+function makeCdpSigner(account: EvmServerAccount): {
+  address: string;
+  getAddress: () => Promise<string>;
+  _signTypedData: (
+    domain: Record<string, unknown>,
+    types: Record<string, Array<{ name: string; type: string }>>,
+    value: Record<string, unknown>
+  ) => Promise<string>;
+} {
   return {
-    address: account.address as string,
-    getAddress: async () => account.address as string,
-    _signTypedData: async (
-      domain: Record<string, any>,
-      types: Record<string, Array<{ name: string; type: string }>>,
-      value: Record<string, any>
-    ): Promise<string> => {
+    address: account.address,
+    getAddress: async () => account.address,
+    _signTypedData: async (domain, types, value) => {
       const primaryType = Object.keys(types).find(t => t !== 'EIP712Domain');
-      if (!primaryType)
+      if (primaryType === undefined)
         throw new Error('Could not determine primaryType from types');
       const EIP712Domain = Object.keys(domain)
-        .filter(k => domain[k] !== undefined && DOMAIN_FIELD_TYPES[k])
+        .filter(k => domain[k] !== undefined && Object.hasOwn(DOMAIN_FIELD_TYPES, k))
         .map(k => ({ name: k, type: DOMAIN_FIELD_TYPES[k] }));
-      // CDP strictly rejects messages with keys not declared in the primary
-      // type. SX's shutter vote path leaks an undeclared `privacy` field,
-      // so filter the message down to declared fields here.
       const message = Object.fromEntries(
         types[primaryType].map(({ name }) => [name, value[name]])
       );
@@ -61,7 +70,7 @@ function makeCdpSigner(account: any) {
         types: { ...types, EIP712Domain },
         primaryType,
         message
-      });
+      } as Parameters<EvmServerAccount['signTypedData']>[0]);
     }
   };
 }
@@ -84,24 +93,20 @@ function getCdpClient(): CdpClient {
   return cdpClient;
 }
 
-let cachedPolicyId: string | null = null;
-
 async function ensurePolicy(): Promise<string> {
-  if (cachedPolicyId) return cachedPolicyId;
-
   const cdp = getCdpClient();
   const { policies } = await cdp.policies.listPolicies({ scope: 'account' });
   const existing = policies.find(p => p.description === POLICY_DESCRIPTION);
-  if (existing) return (cachedPolicyId = existing.id);
+  if (existing) return existing.id;
 
   const created = await cdp.policies.createPolicy({
     policy: {
       scope: 'account',
       description: POLICY_DESCRIPTION,
-      rules: POLICY_RULES as any
+      rules: POLICY_RULES as unknown as CreatePolicyBody['rules']
     }
   });
-  return (cachedPolicyId = created.id);
+  return created.id;
 }
 
 export async function getWalletForUser(signerKey: string): Promise<CdpSigner> {

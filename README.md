@@ -47,6 +47,25 @@ Casts a vote on a Snapshot proposal. Automatically resolves the authorized user.
 
 > **Note:** `snapshot-vote` requires a wallet to be configured for signing (see below). Without a wallet, it returns a configuration error.
 
+### `snapshot-propose`
+
+Creates a Snapshot proposal. Designed so the LLM only has to send what it actually decides: the space's enforced voting type, voting period, snapshot block, and privacy mode are read from the space and applied automatically.
+
+| Input | Type | Description |
+|-------|------|-------------|
+| `space` | `string` | Space ID slug (e.g. `"ens.eth"`) |
+| `title` | `string` | Proposal title |
+| `body` | `string` | Proposal body (markdown, optional) |
+| `discussion` | `string?` | Discussion link |
+| `type` | `string?` | `basic` / `single-choice` / `approval` / `ranked-choice` / `weighted` / `quadratic`. Defaults to the space's enforced type, or `basic`. |
+| `choices` | `string[]?` | Defaults to `["For", "Against", "Abstain"]` for `basic`. Required for other types. |
+| `labels` | `string[]?` | Proposal label IDs |
+| `start` | `number?` | Unix seconds. Defaults to `now + space.voting.delay`. |
+| `end` | `number?` | Unix seconds. Defaults to `start + space.voting.period` (3 days if the space has none). |
+| `shielded` | `boolean?` | Opt into Shutter shielded voting. Only honored when the space's `voting.privacy` is `"any"`; spaces with `voting.privacy === "shutter"` always encrypt. |
+
+The snapshot block is read from `https://rpc.snapshot.org/<chainId>` based on the space's network. Like `snapshot-vote`, this tool requires a wallet to be configured.
+
 ## Usage
 
 ### Hosted (Claude Desktop / Claude.ai)
@@ -81,7 +100,7 @@ Listens on port `8080` by default (override with `PORT` env var).
 #### Stdio (local)
 
 ```bash
-bun stdio.ts
+bun run stdio
 ```
 
 Claude Desktop config example:
@@ -91,7 +110,7 @@ Claude Desktop config example:
   "mcpServers": {
     "snapshot": {
       "command": "bun",
-      "args": ["stdio.ts"],
+      "args": ["src/index.ts", "--stdio"],
       "cwd": "/path/to/snapshot-mcp",
       "env": {
         "ALIAS_PRIVATE_KEY": "0x..."

@@ -1,6 +1,6 @@
 import { Wallet } from '@ethersproject/wallet';
 import { mock } from 'bun:test';
-import { SnapshotOAuthProvider } from '../src/auth.js';
+import { type SnapshotOAuthProvider } from '../src/auth.js';
 
 process.env.JWT_SECRET ??=
   'test-secret-must-be-at-least-32-chars-long-please-yes';
@@ -11,7 +11,7 @@ export function setGqlHandler(fn: (query: string, variables?: any) => unknown) {
   gqlHandler = fn;
 }
 
-mock.module('../src/wallet.ts', () => ({
+mock.module('../src/cdp.ts', () => ({
   getWalletForUser: async () => Wallet.createRandom(),
   createFreshAccount: async () => {
     const w = Wallet.createRandom();

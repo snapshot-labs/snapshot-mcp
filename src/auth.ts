@@ -1,24 +1,24 @@
 import { randomUUID } from 'node:crypto';
-import { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
+import { type OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js';
 import {
-  AuthorizationParams,
-  OAuthServerProvider
+  type AuthorizationParams,
+  type OAuthServerProvider
 } from '@modelcontextprotocol/sdk/server/auth/provider.js';
-import { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
+import { type AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import {
-  OAuthClientInformationFull,
-  OAuthTokens
+  type OAuthClientInformationFull,
+  type OAuthTokens
 } from '@modelcontextprotocol/sdk/shared/auth.js';
-import { Request, Response } from 'express';
-import { JWTPayload, jwtVerify, SignJWT } from 'jose';
+import { type Request, type Response } from 'express';
+import { type JWTPayload, jwtVerify, SignJWT } from 'jose';
+import { createFreshAccount } from './cdp.js';
 import { resolveUserFromAlias } from './hub.js';
-import { createFreshAccount } from './wallet.js';
 
 const ALG = 'HS256';
 
 function getSecret(): Uint8Array {
   const raw = process.env.JWT_SECRET;
-  if (!raw || raw.length < 32) {
+  if (raw === undefined || raw.length < 32) {
     throw new Error(
       'JWT_SECRET must be set and at least 32 characters. Generate one with: openssl rand -hex 32'
     );
@@ -64,7 +64,7 @@ async function signClientId(metadata: ClientMetadata): Promise<string> {
 
 async function verifyClientId(clientId: string): Promise<ClientMetadata> {
   const p = await verify(clientId);
-  if (!p.metadata || typeof p.metadata !== 'object') {
+  if (p.metadata == null || typeof p.metadata !== 'object') {
     throw new Error('Invalid client_id');
   }
   return p.metadata as ClientMetadata;
@@ -84,8 +84,8 @@ const clientsStore: OAuthRegisteredClientsStore = {
       ...client,
       client_id_issued_at: Math.floor(Date.now() / 1000)
     };
-    const client_id = await signClientId(metadata);
-    return { ...metadata, client_id } as OAuthClientInformationFull;
+    const clientId = await signClientId(metadata);
+    return { ...metadata, client_id: clientId } as OAuthClientInformationFull;
   }
 };
 
@@ -164,8 +164,8 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const p = await verify(token);
     if (
-      !p.sub ||
-      !p.aud ||
+      typeof p.sub !== 'string' ||
+      typeof p.aud !== 'string' ||
       typeof p.signerKey !== 'string' ||
       typeof p.exp !== 'number'
     ) {
@@ -173,11 +173,11 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     }
     return {
       token,
-      clientId: p.aud as string,
+      clientId: p.aud,
       scopes: [],
       expiresAt: p.exp,
       extra: {
-        user: p.sub as string,
+        user: p.sub,
         signerKey: p.signerKey
       }
     };
@@ -202,7 +202,10 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
 
   callback = async (req: Request, res: Response): Promise<void> => {
     const sessionId = req.query.session as string | undefined;
-    if (!sessionId) return void res.status(400).send('Missing session');
+    if (sessionId === undefined) {
+      res.status(400).send('Missing session');
+      return;
+    }
     try {
       res.redirect(await this.handleCallback(sessionId));
     } catch (e) {

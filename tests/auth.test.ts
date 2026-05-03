@@ -21,7 +21,7 @@ async function driveAuthCodeFlow(
   // Mock hub: when handleCallback queries `aliases(where: { alias })`,
   // return the user we want this flow to resolve to.
   setGqlHandler((_q, vars) => {
-    const aliasInQuery = (vars as any)?.where?.alias;
+    const aliasInQuery = (vars)?.where?.alias;
     if (aliasInQuery?.toLowerCase() === aliasAddress.toLowerCase()) {
       return { aliases: [{ address: user }] };
     }

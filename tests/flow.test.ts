@@ -35,7 +35,7 @@ describe('end-to-end OAuth flow security', () => {
     );
 
     setGqlHandler((_q, vars) => {
-      const alias = (vars as any)?.where?.alias?.toLowerCase();
+      const alias = (vars)?.where?.alias?.toLowerCase();
       if (alias === flowA.aliasAddress.toLowerCase())
         return { aliases: [{ address: userA }] };
       if (alias === flowB.aliasAddress.toLowerCase())

@@ -1,7 +1,25 @@
 const SNAPSHOT_API_URL =
   process.env.SNAPSHOT_API_URL ?? 'https://hub.snapshot.org/graphql';
 
-export async function gql(query: string, variables?: Record<string, unknown>) {
+// Reorg buffer (mirrors sx-monorepo's EDITOR_SNAPSHOT_OFFSET).
+const SNAPSHOT_BLOCK_OFFSET = 4;
+
+export async function getProposalSnapshotBlock(
+  chainId: number
+): Promise<number> {
+  const res = await fetch(`https://rpc.snapshot.org/${chainId}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_blockNumber' })
+  });
+  const { result } = (await res.json()) as { result: string };
+  return Math.max(0, parseInt(result, 16) - SNAPSHOT_BLOCK_OFFSET);
+}
+
+export async function gql(
+  query: string,
+  variables?: Record<string, unknown>
+): Promise<Record<string, unknown>> {
   const res = await fetch(SNAPSHOT_API_URL, {
     method: 'POST',
     headers: {
@@ -28,13 +46,13 @@ export async function gql(query: string, variables?: Record<string, unknown>) {
 export async function resolveUserFromAlias(
   alias: string
 ): Promise<string | undefined> {
-  const result = await gql(
+  const result = (await gql(
     `query Aliases($where: AliasWhere) {
       aliases(first: 1, skip: 0, where: $where) { address }
     }`,
     { where: { alias } }
-  );
-  return ((result as any)?.aliases ?? [])[0]?.address;
+  )) as { aliases?: { address: string }[] };
+  return result.aliases?.[0]?.address;
 }
 
 const BUILTIN_TYPES = new Set(['String', 'Boolean', 'Int', 'Float', 'ID']);
