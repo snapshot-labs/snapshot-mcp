@@ -39,6 +39,14 @@ export async function resolveUserFromAlias(
 
 const BUILTIN_TYPES = new Set(['String', 'Boolean', 'Int', 'Float', 'ID']);
 
+const REMOVED_QUERIES = new Set([
+  'options',
+  'plugins',
+  'skins',
+  'subscriptions',
+  'messages'
+]);
+
 export const schemaCache: Promise<unknown> = gql(`{
   __schema {
     queryType {
@@ -60,11 +68,14 @@ export const schemaCache: Promise<unknown> = gql(`{
   }
 }`).then(data => {
   const schema = data.__schema as {
-    queryType: unknown;
+    queryType: { fields: { name: string }[] };
     types: { name: string }[];
   };
   schema.types = schema.types.filter(
     t => !t.name.startsWith('__') && !BUILTIN_TYPES.has(t.name)
+  );
+  schema.queryType.fields = schema.queryType.fields.filter(
+    f => !REMOVED_QUERIES.has(f.name)
   );
 
   return schema;
