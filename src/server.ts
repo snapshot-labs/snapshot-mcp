@@ -48,14 +48,21 @@ async function handle(fn: () => Promise<unknown>) {
   }
 }
 
-const SERVER_INSTRUCTIONS = `Snapshot governance MCP. The authenticated user's address is auto-injected as the \`$user\` GraphQL variable on every snapshot-query call. Declare it in your operation (e.g. \`query Foo($user: String!) { ... }\`) and reference \`$user\` in the query body, but do NOT include \`user\` in the \`variables\` map you send; the server supplies its value automatically and will overwrite anything you pass.
+const SERVER_INSTRUCTIONS = `Snapshot governance MCP. Reads via snapshot-query, writes via snapshot-vote, schema introspection only on demand.
 
-To find proposals the current user can act on:
-1. snapshot-query with \`follows(where: { follower: $user })\` to list spaces they follow.
-2. Then \`proposals(where: { space_in: [...spaceIds], state: "active" })\` to list currently-open proposals.
-3. To confirm the user can actually vote on one, query \`vp(voter: $user, space: <spaceId>, proposal: <proposalId>)\`. Voting power is evaluated at \`proposal.snapshot\` (the block when the proposal was created), not now.
+The user's address is auto-bound as \`$user\` on every snapshot-query: declare it (\`query Foo($user: String!)\`) and reference it; do NOT pass \`user\` in \`variables\`.
 
-A vote will only succeed if the proposal is \`state: "active"\` and the user's \`vp.vp > 0\` at that snapshot block.`;
+Common patterns:
+- Find a space by name: \`spaces(where: { search: "<name>" })\`. Space \`id\` is a slug ("ens.eth"), never the display name.
+- Search proposals: \`proposals(where: { title_contains: "<text>", space_in: [...] })\`.
+- User profile: \`user(id: $user) { name about avatar }\`.
+- Followed spaces: \`follows(where: { follower: $user })\`.
+- Active proposals: \`proposals(where: { space_in: [...], state: "active" })\`.
+- Voting power: \`vp(voter: $user, space, proposal)\`. Evaluated at \`proposal.snapshot\` (a block), not now.
+
+Timestamps (\`created\`, \`start\`, \`end\`, \`updated\`) are unix seconds UTC, not ms. Format with \`new Date(t * 1000)\` and verify the year before showing dates.
+
+Re-calling snapshot-vote on the same proposal replaces the previous vote (this is how to change a vote).`;
 
 export function createMcpServer({
   mode = 'stdio'
@@ -115,7 +122,7 @@ export function createMcpServer({
     'snapshot-schema',
     {
       description:
-        'Returns the Snapshot GraphQL schema reference: query entry points, filter types, and key fields. Call this before snapshot-query if you are unsure of available fields or filter syntax.',
+        'Returns the Snapshot GraphQL schema. Large response: call only when a snapshot-query fails on an unknown field, not preemptively. Common queries are listed in the server instructions.',
       inputSchema: {}
     },
     () => handle(() => schemaCache)
@@ -125,7 +132,7 @@ export function createMcpServer({
     'snapshot-query',
     {
       description:
-        "Execute any GraphQL query against the Snapshot API. The authenticated user's address is auto-bound as `$user`: declare it in your operation (`query Foo($user: String!) { ... }`) and reference `$user` in the query body, but do NOT include `user` in the `variables` map (the server fills it in and overwrites anything you pass). Use snapshot-schema first to discover available queries, filters, and fields. Useful queries: `follows` (spaces a user follows), `proposals` (filter by `state` and `space_in`), `vp` (voting power for a voter on a specific proposal, evaluated at the proposal's snapshot block).",
+        'Execute any GraphQL query against the Snapshot API. The user\'s address is auto-bound as $user: declare `query Foo($user: String!)` and do NOT pass `user` in `variables` (it is overwritten). Common queries: `spaces(where: { search })` to find a space by name (ids are slugs like "ens.eth", not names); `proposals(where: { space_in, state })`; `proposals(where: { title_contains })`; `vp(voter: $user, space, proposal)` for voting power; `user(id: $user) { name about }` for the user\'s profile. Timestamps are unix seconds UTC. Use snapshot-schema only when this query errors on an unknown field.',
       inputSchema: {
         query: z.string().describe('GraphQL query string'),
         variables: z
@@ -150,7 +157,7 @@ export function createMcpServer({
     'snapshot-vote',
     {
       description:
-        'Cast a vote on a Snapshot proposal. The proposal\'s `type` and `privacy` are fetched from the hub and applied automatically; shutter-encrypted proposals also strip the reason. Preconditions: the proposal must be in `state: "active"`, and the user must have voting power at `proposal.snapshot` (check via `vp(voter: $user, space, proposal)`). If not yet authorized, this tool returns the authorization URL for the user to visit.',
+        'Cast a vote on a Snapshot proposal. Re-calling this on the same proposal REPLACES the previous vote (use it to change a vote). The proposal\'s `type` and `privacy` are fetched and applied automatically; shutter-encrypted proposals strip the reason. Preconditions: proposal `state: "active"` and `vp(voter: $user, space, proposal).vp > 0`. If not yet authorized, returns the authorization URL.',
       inputSchema: {
         space: z.string().describe('Space ID (e.g. "ens.eth")'),
         proposal: z.string().describe('Proposal ID (hex string)'),
@@ -196,8 +203,8 @@ export function createMcpServer({
           result,
           links: {
             voter: `https://snapshot.box/#/profile/${from}`,
-            space: `https://snapshot.box/#/${data.space}`,
-            proposal: `https://snapshot.box/#/${data.space}/proposal/${data.proposal}`
+            space: `https://snapshot.box/#/s:${data.space}`,
+            proposal: `https://snapshot.box/#/s:${data.space}/proposal/${data.proposal}`
           }
         };
       })
