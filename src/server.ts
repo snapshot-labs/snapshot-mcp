@@ -1,10 +1,20 @@
+// SX's shutter encryption path does `if (window) await init()` to gate a
+// browser-only init, but `window` is undeclared in Node so the bare reference
+// throws. Stubbing `window` to undefined makes the check falsy; we then
+// initialise shutter-crypto ourselves before the first shielded vote.
+(globalThis as { window?: unknown }).window ??= undefined;
+
 import { Wallet } from '@ethersproject/wallet';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { init as shutterInit } from '@shutter-network/shutter-crypto';
 import { clients, offchainMainnet } from '@snapshot-labs/sx';
 import { z } from 'zod';
 import pkg from '../package.json' with { type: 'json' };
 import { gql, resolveUserFromAlias, schemaCache } from './hub.js';
 import { getWalletForUser } from './wallet.js';
+
+let shutterReady: Promise<void> | undefined;
+const ensureShutterReady = () => (shutterReady ??= shutterInit());
 
 function getStdioWallet(): Wallet {
   const privateKey = process.env.ALIAS_PRIVATE_KEY;
@@ -172,6 +182,7 @@ export function createMcpServer({
     (data, extra) =>
       handle(async () => {
         const { user: from, signer } = await resolveContext(extra);
+        if (data.privacy === 'shutter') await ensureShutterReady();
         const envelope = await sx.vote({
           signer: signer as any,
           data: {
