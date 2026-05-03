@@ -2,6 +2,7 @@ import { Wallet } from '@ethersproject/wallet';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { clients, offchainMainnet } from '@snapshot-labs/sx';
 import { z } from 'zod';
+import pkg from '../package.json' with { type: 'json' };
 import { gql, resolveUserFromAlias, schemaCache } from './hub.js';
 import { getWalletForUser } from './wallet.js';
 
@@ -50,7 +51,26 @@ export function createMcpServer({
   mode = 'stdio'
 }: { mode?: 'http' | 'stdio' } = {}): McpServer {
   const server = new McpServer(
-    { name: 'snapshot', version: '0.1.0' },
+    {
+      name: 'snapshot',
+      title: 'Snapshot',
+      version: pkg.version,
+      websiteUrl: 'https://snapshot.box',
+      icons: [
+        {
+          src: 'https://snapshot.box/favicon-dark.svg',
+          mimeType: 'image/svg+xml',
+          sizes: ['any'],
+          theme: 'light'
+        },
+        {
+          src: 'https://snapshot.box/favicon.svg',
+          mimeType: 'image/svg+xml',
+          sizes: ['any'],
+          theme: 'dark'
+        }
+      ]
+    },
     { instructions: SERVER_INSTRUCTIONS }
   );
 
