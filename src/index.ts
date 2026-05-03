@@ -11,6 +11,7 @@ const port = Number(process.env.PORT ?? 8080);
 const baseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;
 
 const app = createMcpExpressApp({ host: '0.0.0.0' });
+app.set('trust proxy', 1);
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
 const provider = new SnapshotOAuthProvider();
