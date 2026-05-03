@@ -50,11 +50,17 @@ function makeCdpSigner(account: any) {
       const EIP712Domain = Object.keys(domain)
         .filter(k => domain[k] !== undefined && DOMAIN_FIELD_TYPES[k])
         .map(k => ({ name: k, type: DOMAIN_FIELD_TYPES[k] }));
+      // CDP strictly rejects messages with keys not declared in the primary
+      // type. SX's shutter vote path leaks an undeclared `privacy` field,
+      // so filter the message down to declared fields here.
+      const message = Object.fromEntries(
+        types[primaryType].map(({ name }) => [name, value[name]])
+      );
       return account.signTypedData({
         domain,
         types: { ...types, EIP712Domain },
         primaryType,
-        message: value
+        message
       });
     }
   };
