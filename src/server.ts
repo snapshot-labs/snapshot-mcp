@@ -37,12 +37,12 @@ async function handle(fn: () => Promise<unknown>) {
   }
 }
 
-const SERVER_INSTRUCTIONS = `Snapshot governance MCP. The authenticated user's address is auto-injected as the \`$user\` GraphQL variable on every snapshot-query call. Declare it in your operation (e.g. \`query Foo($user: String!) { ... }\`) and reference \`$user\` in the query body — but do NOT include \`user\` in the \`variables\` map you send; the server supplies its value automatically and will overwrite anything you pass.
+const SERVER_INSTRUCTIONS = `Snapshot governance MCP. The authenticated user's address is auto-injected as the \`$user\` GraphQL variable on every snapshot-query call. Declare it in your operation (e.g. \`query Foo($user: String!) { ... }\`) and reference \`$user\` in the query body, but do NOT include \`user\` in the \`variables\` map you send; the server supplies its value automatically and will overwrite anything you pass.
 
 To find proposals the current user can act on:
 1. snapshot-query with \`follows(where: { follower: $user })\` to list spaces they follow.
 2. Then \`proposals(where: { space_in: [...spaceIds], state: "active" })\` to list currently-open proposals.
-3. To confirm the user can actually vote on one, query \`vp(voter: $user, space: <spaceId>, proposal: <proposalId>)\` — voting power is evaluated at \`proposal.snapshot\` (the block when the proposal was created), not now.
+3. To confirm the user can actually vote on one, query \`vp(voter: $user, space: <spaceId>, proposal: <proposalId>)\`. Voting power is evaluated at \`proposal.snapshot\` (the block when the proposal was created), not now.
 
 A vote will only succeed if the proposal is \`state: "active"\` and the user's \`vp.vp > 0\` at that snapshot block.`;
 
@@ -85,7 +85,7 @@ export function createMcpServer({
     'snapshot-schema',
     {
       description:
-        'Returns the Snapshot GraphQL schema reference — query entry points, filter types, and key fields. Call this before snapshot-query if you are unsure of available fields or filter syntax.',
+        'Returns the Snapshot GraphQL schema reference: query entry points, filter types, and key fields. Call this before snapshot-query if you are unsure of available fields or filter syntax.',
       inputSchema: {}
     },
     () => handle(() => schemaCache)
@@ -95,7 +95,7 @@ export function createMcpServer({
     'snapshot-query',
     {
       description:
-        "Execute any GraphQL query against the Snapshot API. The authenticated user's address is auto-bound as `$user`: declare it in your operation (`query Foo($user: String!) { ... }`) and reference `$user` in the query body, but do NOT include `user` in the `variables` map (the server fills it in and overwrites anything you pass). Use snapshot-schema first to discover available queries, filters, and fields. Useful queries: `follows` (spaces a user follows), `proposals` (filter by `state` and `space_in`), `vp` (voting power for a voter on a specific proposal — evaluated at the proposal's snapshot block).",
+        "Execute any GraphQL query against the Snapshot API. The authenticated user's address is auto-bound as `$user`: declare it in your operation (`query Foo($user: String!) { ... }`) and reference `$user` in the query body, but do NOT include `user` in the `variables` map (the server fills it in and overwrites anything you pass). Use snapshot-schema first to discover available queries, filters, and fields. Useful queries: `follows` (spaces a user follows), `proposals` (filter by `state` and `space_in`), `vp` (voting power for a voter on a specific proposal, evaluated at the proposal's snapshot block).",
       inputSchema: {
         query: z.string().describe('GraphQL query string'),
         variables: z
@@ -120,14 +120,14 @@ export function createMcpServer({
     'snapshot-vote',
     {
       description:
-        'Cast a vote on a Snapshot proposal. Preconditions: (a) the proposal must currently be in `state: "active"` — votes on `pending` or `closed` proposals are rejected by the hub; (b) the user must have voting power at the proposal\'s snapshot block, queryable via `vp(voter: $user, space, proposal)` on the GraphQL API. Always run snapshot-query first to fetch `state`, `type`, `choices`, `snapshot`, `space.id` and confirm `vp.vp > 0` for the voter. If not yet authorized, this tool returns the authorization URL for the user to visit.',
+        'Cast a vote on a Snapshot proposal. Preconditions: (a) the proposal must currently be in `state: "active"`; votes on `pending` or `closed` proposals are rejected by the hub. (b) the user must have voting power at the proposal\'s snapshot block, queryable via `vp(voter: $user, space, proposal)` on the GraphQL API. Always run snapshot-query first to fetch `state`, `type`, `choices`, `snapshot`, `privacy`, `space.id` and confirm `vp.vp > 0` for the voter. If the proposal\'s `privacy` is `"shutter"`, pass `privacy: "shutter"` so the choice is encrypted until the proposal closes. If not yet authorized, this tool returns the authorization URL for the user to visit.',
       inputSchema: {
         space: z.string().describe('Space ID (e.g. "ens.eth")'),
         proposal: z.string().describe('Proposal ID (hex string)'),
         choice: z
           .union([z.number(), z.array(z.number()), z.record(z.number())])
           .describe(
-            'Vote choice — number for single-choice/basic, array for approval/ranked-choice, object for weighted/quadratic'
+            'Vote choice. Number for single-choice/basic, array for approval/ranked-choice, object for weighted/quadratic'
           ),
         reason: z.string().default('').describe('Reason for the vote'),
         type: z
@@ -140,7 +140,13 @@ export function createMcpServer({
             'quadratic'
           ])
           .default('basic')
-          .describe('Voting type (defaults to "basic")')
+          .describe('Voting type (defaults to "basic")'),
+        privacy: z
+          .enum(['none', 'shutter'])
+          .default('none')
+          .describe(
+            'Privacy mode. "shutter" encrypts the choice via the Shutter network until the proposal closes. Must match the proposal\'s `privacy` field.'
+          )
       }
     },
     (data, extra) =>
@@ -151,7 +157,6 @@ export function createMcpServer({
           data: {
             ...data,
             from,
-            privacy: 'none',
             app: 'snapshot-mcp',
             authenticator: '',
             strategies: [],
