@@ -1,18 +1,8 @@
 # Snapshot MCP
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server for the Snapshot API. Lets AI assistants query spaces, proposals, votes, and voting power through Snapshot's GraphQL API and semantic search. Available as a public endpoint at `https://mcp.snapshot.box`.
+A [Model Context Protocol](https://modelcontextprotocol.io) server for the Snapshot API. Lets AI assistants query spaces, proposals, votes, and voting power through Snapshot's GraphQL API. Available as a public endpoint at `https://mcp.snapshot.box`.
 
 ## Tools
-
-### `snapshot-search`
-
-Semantic search across Snapshot proposals and spaces. Uses vector embeddings + BM25 text search with rank fusion for high-quality results.
-
-| Input | Type | Description |
-|-------|------|-------------|
-| `q` | `string` | Search query (natural language or keywords) |
-| `space` | `string?` | Filter proposals by space ID (e.g. `"ens.eth"`) |
-| `type` | `"proposal" \| "space"?` | Limit to proposals or spaces. Omit to search both |
 
 ### `snapshot-query`
 
@@ -119,7 +109,6 @@ Copy `.env.example` to `.env` and configure:
 |----------|-------------|
 | `SNAPSHOT_API_KEY` | [Snapshot API key](https://docs.snapshot.box/tools/api/api-keys) for higher rate limits (optional) |
 | `SNAPSHOT_API_URL` | GraphQL endpoint (default `https://hub.snapshot.org/graphql`) |
-| `SEARCH_API_URL` | Search service endpoint (default `https://search.snapshot.box`) |
 | `PORT` | HTTP server port (default: `8080`) |
 | `BASE_URL` | Public URL for OAuth metadata (e.g. `https://mcp.snapshot.box`) |
 | `JWT_SECRET` | HS256 secret used to sign access tokens — **required for HTTP mode** (≥32 chars; `openssl rand -hex 32`) |

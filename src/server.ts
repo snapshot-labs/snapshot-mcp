@@ -3,7 +3,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { clients, offchainMainnet } from '@snapshot-labs/sx';
 import { z } from 'zod';
 import { gql, resolveUserFromAlias, schemaCache } from './hub.js';
-import { search } from './search.js';
 import { getWalletForUser } from './wallet.js';
 
 function getStdioWallet(): Wallet {
@@ -169,28 +168,6 @@ export function createMcpServer({
           }
         };
       })
-  );
-
-  server.registerTool(
-    'snapshot-search',
-    {
-      description:
-        'Semantic search across Snapshot proposals and spaces. Uses vector embeddings + text search (BM25) with rank fusion for high-quality results. Use this to find proposals or spaces by topic, keyword, or natural language query. Returns scored results sorted by relevance.',
-      inputSchema: {
-        q: z.string().describe('Search query (natural language or keywords)'),
-        space: z
-          .string()
-          .optional()
-          .describe(
-            'Filter proposals by space ID (e.g. "ens.eth"). Cannot be used with type "space".'
-          ),
-        type: z
-          .enum(['proposal', 'space'])
-          .optional()
-          .describe('Limit to "proposal" or "space". Omit to search both.')
-      }
-    },
-    ({ q, space, type }) => handle(() => search(q, space, type))
   );
 
   return server;
