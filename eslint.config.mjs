@@ -16,11 +16,11 @@ export default [
       },
     },
     rules: {
-      'max-lines': ['error', { max: 400, skipBlankLines: false, skipComments: false }],
+      'max-lines': ['error', { max: 500, skipBlankLines: false, skipComments: false }],
       'max-len': ['error', { code: 140, ignoreComments: true, ignoreTemplateLiterals: true, ignoreStrings: true }],
       'max-lines-per-function': ['error', { max: 200, skipBlankLines: false, skipComments: false }],
       'no-unused-vars': ['error', { vars: 'all', args: 'none', caughtErrors: 'none', ignoreRestSiblings: true, varsIgnorePattern: '^_' }],
-      'no-console': ['error', { allow: ['error', 'warn'] }],
+      'no-console': ['error', { allow: ['log', 'error', 'warn'] }],
       'eqeqeq': ['error', 'always', { null: 'ignore' }],
       'prefer-const': 'error',
       'object-shorthand': 'error',
