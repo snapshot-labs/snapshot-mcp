@@ -5,22 +5,61 @@ import {
   type EvmServerAccount
 } from '@coinbase/cdp-sdk';
 
-const POLICY_DESCRIPTION = 'snapshot mcp v5';
+const POLICY_DESCRIPTION = 'snapshot mcp v6';
 
-const SNAPSHOT_PRIMARY_TYPES = [
-  'Vote',
-  'Proposal',
-  'UpdateProposal',
-  'FlagProposal',
-  'CancelProposal',
-  'Follow',
-  'Unfollow',
-  'Alias',
-  'Space',
-  'DeleteSpace',
-  'Profile',
-  'Statement'
-];
+const APP_CONDITION = { path: 'app', match: '^snapshot-mcp$' } as const;
+
+const VOTE_FIELDS_BASE = [
+  { name: 'from', type: 'string' },
+  { name: 'space', type: 'string' },
+  { name: 'timestamp', type: 'uint64' },
+  { name: 'proposal', type: 'string' }
+] as const;
+
+const VOTE_FIELDS_TAIL = [
+  { name: 'reason', type: 'string' },
+  { name: 'app', type: 'string' },
+  { name: 'metadata', type: 'string' }
+] as const;
+
+const voteRule = (choiceType: string): unknown => ({
+  action: 'accept',
+  operation: 'signEvmTypedData',
+  criteria: [
+    {
+      type: 'evmTypedDataField',
+      types: {
+        primaryType: 'Vote',
+        types: {
+          Vote: [
+            ...VOTE_FIELDS_BASE,
+            { name: 'choice', type: choiceType },
+            ...VOTE_FIELDS_TAIL
+          ]
+        }
+      },
+      conditions: [APP_CONDITION]
+    }
+  ]
+});
+
+const PROPOSAL_FIELDS = [
+  { name: 'from', type: 'string' },
+  { name: 'space', type: 'string' },
+  { name: 'timestamp', type: 'uint64' },
+  { name: 'type', type: 'string' },
+  { name: 'title', type: 'string' },
+  { name: 'body', type: 'string' },
+  { name: 'discussion', type: 'string' },
+  { name: 'choices', type: 'string[]' },
+  { name: 'labels', type: 'string[]' },
+  { name: 'start', type: 'uint64' },
+  { name: 'end', type: 'uint64' },
+  { name: 'snapshot', type: 'uint64' },
+  { name: 'plugins', type: 'string' },
+  { name: 'privacy', type: 'string' },
+  { name: 'app', type: 'string' }
+] as const;
 
 const POLICY_RULES = [
   ...['signEvmTransaction', 'sendEvmTransaction'].map(operation => ({
@@ -34,17 +73,20 @@ const POLICY_RULES = [
     criteria: [{ type: 'evmMessage', match: '.*' }]
   },
   { action: 'reject', operation: 'signEvmHash' },
-  ...SNAPSHOT_PRIMARY_TYPES.map(primaryType => ({
+  voteRule('uint32'),
+  voteRule('uint32[]'),
+  voteRule('string'),
+  {
     action: 'accept',
     operation: 'signEvmTypedData',
     criteria: [
       {
         type: 'evmTypedDataField',
-        types: { primaryType, types: { [primaryType]: [] } },
-        conditions: [{ path: 'domain.name', match: '^snapshot$' }]
+        types: { primaryType: 'Proposal', types: { Proposal: PROPOSAL_FIELDS } },
+        conditions: [APP_CONDITION]
       }
     ]
-  }))
+  }
 ] as const;
 
 const DOMAIN_FIELD_TYPES: Record<string, string> = {
