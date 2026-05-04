@@ -1,11 +1,9 @@
-import { randomUUID } from 'node:crypto';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { type Request, type Response } from 'express';
 import pkg from '../package.json' with { type: 'json' };
 import { SnapshotOAuthProvider } from './auth.js';
@@ -19,6 +17,11 @@ import {
   registerVoteTool
 } from './tools.js';
 
+const ICONS = [
+  { src: 'https://snapshot.box/favicon-dark.svg', mimeType: 'image/svg+xml', sizes: ['any'], theme: 'light' as const },
+  { src: 'https://snapshot.box/favicon.svg', mimeType: 'image/svg+xml', sizes: ['any'], theme: 'dark' as const }
+];
+
 function createMcpServer(mode: 'http' | 'stdio'): McpServer {
   const server = new McpServer(
     {
@@ -26,20 +29,7 @@ function createMcpServer(mode: 'http' | 'stdio'): McpServer {
       title: 'Snapshot',
       version: pkg.version,
       websiteUrl: 'https://snapshot.box',
-      icons: [
-        {
-          src: 'https://snapshot.box/favicon-dark.svg',
-          mimeType: 'image/svg+xml',
-          sizes: ['any'],
-          theme: 'light'
-        },
-        {
-          src: 'https://snapshot.box/favicon.svg',
-          mimeType: 'image/svg+xml',
-          sizes: ['any'],
-          theme: 'dark'
-        }
-      ]
+      icons: ICONS
     },
     { instructions }
   );
@@ -60,7 +50,6 @@ if (process.argv.includes('--stdio')) {
 
   const app = createMcpExpressApp({ host: '0.0.0.0' });
   app.set('trust proxy', 1);
-  const transports = new Map<string, StreamableHTTPServerTransport>();
 
   const provider = new SnapshotOAuthProvider();
   app.use(mcpAuthRouter({ provider, issuerUrl: new URL(baseUrl) }));
@@ -68,64 +57,15 @@ if (process.argv.includes('--stdio')) {
 
   const authMiddleware = requireBearerAuth({ verifier: provider });
 
-  const handlePost = async (req: Request, res: Response): Promise<void> => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    const existing = sessionId !== undefined ? transports.get(sessionId) : undefined;
-    if (existing) {
-      await existing.handleRequest(req, res, req.body);
-      return;
-    }
-
-    if (isInitializeRequest(req.body)) {
-      const transport: StreamableHTTPServerTransport =
-        new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: sid => {
-            transports.set(sid, transport);
-          }
-        });
-      transport.onclose = () => {
-        if (transport.sessionId !== undefined) transports.delete(transport.sessionId);
-      };
-      await createMcpServer('http').connect(transport);
-      await transport.handleRequest(req, res, req.body);
-      return;
-    }
-
-    if (sessionId !== undefined) {
-      res.status(404).json({
-        jsonrpc: '2.0',
-        error: { code: -32001, message: 'Session not found' },
-        id: null
-      });
-      return;
-    }
-
-    res.status(400).json({
-      jsonrpc: '2.0',
-      error: {
-        code: -32000,
-        message: 'Bad Request: No valid session ID provided'
-      },
-      id: null
+  // Stateless mode: a fresh transport per request so deploys never strand an active session.
+  app.post('/', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined
     });
-  };
-
-  const handleSession = async (req: Request, res: Response): Promise<void> => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    const transport = sessionId !== undefined ? transports.get(sessionId) : undefined;
-    if (!transport) {
-      res
-        .status(sessionId !== undefined ? 404 : 400)
-        .send(sessionId !== undefined ? 'Session not found' : 'Missing session ID');
-      return;
-    }
-    await transport.handleRequest(req, res);
-  };
-
-  app.post('/', authMiddleware, handlePost);
-  app.get('/', authMiddleware, handleSession);
-  app.delete('/', authMiddleware, handleSession);
+    res.on('close', () => { transport.close().catch(() => {}); });
+    await createMcpServer('http').connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  });
 
   app.listen(port);
 }

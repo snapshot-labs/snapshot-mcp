@@ -68,6 +68,19 @@ describe('OAuth provider security', () => {
     expect(got).toBe(PKCE_CHALLENGE);
   });
 
+  test('exchangeAuthorizationCode rejects unknown / forged codes', async () => {
+    const { client } = await driveAuthCodeFlow(
+      provider,
+      '0x000000000000000000000000000000000000aaaa'
+    );
+    await expect(
+      provider.exchangeAuthorizationCode(client, 'not-a-code')
+    ).rejects.toThrow('Unknown authorization code');
+    await expect(
+      provider.exchangeAuthorizationCode(client, 'a.b.c')
+    ).rejects.toThrow('Unknown authorization code');
+  });
+
   test('exchangeAuthorizationCode is single-use (replay rejected)', async () => {
     const { client, code } = await driveAuthCodeFlow(
       provider,

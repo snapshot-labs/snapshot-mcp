@@ -81,7 +81,7 @@ export async function startAuthFlow(
   );
   const url = res.redirectedTo as string;
   const aliasAddress = url.match(/authorize\/(0x[0-9a-fA-F]+)/)![1];
-  const sessionId = decodeURIComponent(url).match(/session=([a-f0-9-]+)/)![1];
+  const sessionId = decodeURIComponent(url).match(/session=([^&]+)/)![1];
   return { client, aliasAddress, sessionId };
 }
 
