@@ -12,6 +12,7 @@ import { SnapshotOAuthProvider } from './auth.js';
 import instructions from './instructions.md' with { type: 'text' };
 import {
   createResolveContext,
+  registerFollowTool,
   registerProposeTool,
   registerQueryTool,
   registerSchemaTool,
@@ -47,6 +48,7 @@ function createMcpServer(mode: 'http' | 'stdio'): McpServer {
   registerQueryTool(server, resolveContext);
   registerVoteTool(server, resolveContext);
   registerProposeTool(server, resolveContext);
+  registerFollowTool(server, resolveContext);
   return server;
 }
 

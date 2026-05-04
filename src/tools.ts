@@ -353,3 +353,37 @@ export function registerProposeTool(
       })
   );
 }
+
+export function registerFollowTool(
+  server: McpServer,
+  resolveContext: ResolveContext
+): void {
+  server.registerTool(
+    'snapshot-follow',
+    {
+      description:
+        'Add a Snapshot space to the user\'s followed list. Calling this again on a space the user already follows is a no-op on Snapshot\'s side. Use `follows(where: { follower: $user })` via snapshot-query to list followed spaces.',
+      inputSchema: {
+        space: z.string().describe('Space ID slug (e.g. "ens.eth")')
+      }
+    },
+    (data, extra) =>
+      handle(async () => {
+        const { user: from, signer } = await resolveContext(extra);
+        const { space } = (await gql(
+          'query ($id: String!) { space(id: $id) { id network } }',
+          { id: data.space }
+        )) as { space: { id: string; network: string } | null };
+        if (!space) throw new Error(`Space not found: ${data.space}`);
+        const envelope = await sx.followSpace({
+          signer: signer as Wallet,
+          data: { from, space: space.id, network: space.network }
+        });
+        const result = (await sx.send(envelope)) as unknown;
+        return {
+          result,
+          links: { space: `https://snapshot.box/#/s:${space.id}` }
+        };
+      })
+  );
+}

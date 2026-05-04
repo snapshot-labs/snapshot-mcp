@@ -1,12 +1,12 @@
 # Snapshot MCP
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server for the Snapshot API. Lets AI assistants query spaces, proposals, votes, and voting power through Snapshot's GraphQL API. Available as a public endpoint at `https://mcp.snapshot.box`.
+A [Model Context Protocol](https://modelcontextprotocol.io) server for [Snapshot](https://snapshot.box). Lets AI assistants read governance data (spaces, proposals, votes, voting power) and act on the user's behalf (cast votes, create proposals, follow spaces) through Snapshot's GraphQL API. Available as a hosted endpoint at `https://mcp.snapshot.box`, or self-hostable.
 
 ## Tools
 
 ### `snapshot-query`
 
-Executes any GraphQL query against the Snapshot API.
+Runs any GraphQL query against the Snapshot API. The user's address is auto-bound as `$user` — declare it in the query and reference it; do not pass it in `variables`.
 
 | Input | Type | Description |
 |-------|------|-------------|
@@ -29,42 +29,51 @@ query ($space: String!) {
 
 ### `snapshot-schema`
 
-Returns the Snapshot GraphQL schema reference — query entry points, filter types, and field definitions. Call this before `snapshot-query` if unsure of available fields or filter syntax.
+Returns the Snapshot GraphQL schema. Call this before `snapshot-query` only when a query fails on an unknown field or filter. The response is large, so do not call it preemptively.
 
-No inputs required.
+No inputs.
 
 ### `snapshot-vote`
 
-Casts a vote on a Snapshot proposal. Automatically resolves the authorized user. If not yet authorized, returns the authorization URL for the user to visit.
+Casts a vote on a Snapshot proposal. The proposal's voting `type` and `privacy` are fetched from Snapshot and applied automatically, so the caller does not need to specify them. Re-calling on the same proposal **replaces** the previous vote (this is how the user changes a vote).
 
 | Input | Type | Description |
 |-------|------|-------------|
-| `space` | `string` | Space ID (e.g. `"ens.eth"`) |
+| `space` | `string` | Space ID slug (e.g. `"ens.eth"`) |
 | `proposal` | `string` | Proposal ID (hex string) |
-| `choice` | `number \| number[] \| object` | Vote choice — number for single-choice/basic, array for approval/ranked-choice, object for weighted/quadratic |
-| `reason` | `string` | Reason for the vote (optional) |
-| `type` | `string` | Voting type: `basic`, `single-choice`, `approval`, `ranked-choice`, `weighted`, `quadratic` (optional, defaults to `basic`) |
+| `choice` | `number \| number[] \| object` | A number for `basic`/`single-choice`, an array of indices for `approval`/`ranked-choice`, or `{ "1": weight, "2": weight, ... }` for `weighted`/`quadratic` |
+| `reason` | `string?` | Reason for the vote. Ignored on Shutter-encrypted proposals. |
 
-> **Note:** `snapshot-vote` requires a wallet to be configured for signing (see below). Without a wallet, it returns a configuration error.
+Requires a wallet to be configured for signing (see [Configuration](#configuration)). On HTTP, this is the OAuth-managed CDP alias; on stdio, it is the `ALIAS_PRIVATE_KEY`. If the user has not yet authorized the alias, the tool returns the authorization URL for them to visit.
 
 ### `snapshot-propose`
 
-Creates a Snapshot proposal. Designed so the LLM only has to send what it actually decides: the space's enforced voting type, voting period, snapshot block, and privacy mode are read from the space and applied automatically.
+Creates a Snapshot proposal. Most defaults come from the space itself, so for typical use you only need `space`, `title`, and `body`. The space's enforced voting type, voting period, snapshot block, and privacy mode are read from Snapshot and applied automatically.
 
 | Input | Type | Description |
 |-------|------|-------------|
 | `space` | `string` | Space ID slug (e.g. `"ens.eth"`) |
 | `title` | `string` | Proposal title |
-| `body` | `string` | Proposal body (markdown, optional) |
+| `body` | `string?` | Proposal body (markdown) |
 | `discussion` | `string?` | Discussion link |
-| `type` | `string?` | `basic` / `single-choice` / `approval` / `ranked-choice` / `weighted` / `quadratic`. Defaults to the space's enforced type, or `basic`. |
-| `choices` | `string[]?` | Defaults to `["For", "Against", "Abstain"]` for `basic`. Required for other types. |
+| `type` | `string?` | One of `basic`, `single-choice`, `approval`, `ranked-choice`, `weighted`, `quadratic`. Defaults to whatever the space enforces, or `basic`. |
+| `choices` | `string[]?` | Vote choices. Defaults to `["For", "Against", "Abstain"]` for `basic`; required for any other type. |
 | `labels` | `string[]?` | Proposal label IDs |
-| `start` | `number?` | Unix seconds. Defaults to `now + space.voting.delay`. |
-| `end` | `number?` | Unix seconds. Defaults to `start + space.voting.period` (3 days if the space has none). |
-| `shielded` | `boolean?` | Opt into Shutter shielded voting. Only honored when the space's `voting.privacy` is `"any"`; spaces with `voting.privacy === "shutter"` always encrypt. |
+| `start` | `number?` | Voting start as a unix timestamp in seconds. Defaults to `now + space.voting.delay`. |
+| `end` | `number?` | Voting end as a unix timestamp in seconds. Defaults to `start + space.voting.period` (3 days if the space sets none). |
+| `shielded` | `boolean?` | Opt into Shutter-encrypted voting. Only honored when the space's `voting.privacy` is `"any"`; spaces with `voting.privacy === "shutter"` always encrypt. |
 
-The snapshot block is read from `https://rpc.snapshot.org/<chainId>` based on the space's network. Like `snapshot-vote`, this tool requires a wallet to be configured.
+The snapshot block is read from `https://rpc.snapshot.org/<chainId>` based on the space's network. Requires a wallet, same as `snapshot-vote`.
+
+### `snapshot-follow`
+
+Adds a space to the user's followed list. Calling it again on a space the user already follows is safe — Snapshot does not duplicate the follow.
+
+| Input | Type | Description |
+|-------|------|-------------|
+| `space` | `string` | Space ID slug (e.g. `"ens.eth"`) |
+
+Requires a wallet, same as `snapshot-vote` and `snapshot-propose`.
 
 ## Usage
 
