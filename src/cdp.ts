@@ -5,9 +5,23 @@ import {
   type EvmServerAccount
 } from '@coinbase/cdp-sdk';
 
-const POLICY_DESCRIPTION = 'snapshot mcp v4';
+const POLICY_DESCRIPTION = 'snapshot mcp v5';
 
-// Accept only Snapshot-domain typed data; reject all else (CDP requires a primaryType per rule).
+const SNAPSHOT_PRIMARY_TYPES = [
+  'Vote',
+  'Proposal',
+  'UpdateProposal',
+  'FlagProposal',
+  'CancelProposal',
+  'Follow',
+  'Unfollow',
+  'Alias',
+  'Space',
+  'DeleteSpace',
+  'Profile',
+  'Statement'
+];
+
 const POLICY_RULES = [
   ...['signEvmTransaction', 'sendEvmTransaction'].map(operation => ({
     action: 'reject',
@@ -20,7 +34,7 @@ const POLICY_RULES = [
     criteria: [{ type: 'evmMessage', match: '.*' }]
   },
   { action: 'reject', operation: 'signEvmHash' },
-  ...['Vote', 'Proposal'].map(primaryType => ({
+  ...SNAPSHOT_PRIMARY_TYPES.map(primaryType => ({
     action: 'accept',
     operation: 'signEvmTypedData',
     criteria: [
