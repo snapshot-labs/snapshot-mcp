@@ -1,4 +1,4 @@
-// Stub `window` so SX's `if (window)` shutter guard is falsy in Node; we init shutter ourselves.
+// Stub `window` so SX's `if (window)` shutter guard is falsy in Node. We init shutter ourselves.
 (globalThis as { window?: unknown }).window ??= undefined;
 
 import { Wallet } from '@ethersproject/wallet';
@@ -61,48 +61,33 @@ type ToolResponse = {
   isError?: boolean;
 };
 
-type LogContext = { tool: string; extra?: Record<string, unknown> };
-
-function shortAddr(addr?: string): string {
-  if (addr === undefined || addr.length < 10) return addr ?? 'anonymous';
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-}
-
-function buildPrefix(ctx: LogContext): { prefix: string; reqId: string } {
-  const reqId = String(
-    (ctx.extra as { requestId?: unknown } | undefined)?.requestId ?? '-'
-  );
-  const sessionId = String(
-    (ctx.extra as { sessionId?: unknown } | undefined)?.sessionId ?? '-'
-  );
-  const user = (ctx.extra?.authInfo as AuthInfoExtra | undefined)?.extra?.user;
-  return {
-    prefix: `[req=${reqId}] [session=${sessionId.slice(0, 8)}] [tool=${ctx.tool}] [user=${shortAddr(user)}]`,
-    reqId
-  };
-}
+type Extra = {
+  requestId?: unknown;
+  sessionId?: unknown;
+  authInfo?: AuthInfoExtra;
+};
 
 async function handle(
-  ctx: LogContext,
+  tool: string,
+  extra: Record<string, unknown> | undefined,
   fn: () => Promise<unknown>
 ): Promise<ToolResponse> {
-  const { prefix, reqId } = buildPrefix(ctx);
+  const ex = extra as Extra | undefined;
+  const reqId = String(ex?.requestId ?? '-');
+  const sid = String(ex?.sessionId ?? '-').slice(0, 8);
+  const u = ex?.authInfo?.extra?.user;
+  const user = u !== undefined && u.length >= 10 ? `${u.slice(0, 6)}...${u.slice(-4)}` : u ?? 'anonymous';
+  const prefix = `[req=${reqId}] [session=${sid}] [tool=${tool}] [user=${user}]`;
   console.log(`${prefix} start`);
   try {
     const result = await fn();
     console.log(`${prefix} ok`);
-    return {
-      content: [
-        { type: 'text' as const, text: JSON.stringify(result, null, 2) }
-      ]
-    };
+    return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     console.error(`${prefix} error: ${message}`, e);
     return {
-      content: [
-        { type: 'text' as const, text: `Error [req=${reqId}]: ${message}` }
-      ],
+      content: [{ type: 'text' as const, text: `Error [req=${reqId}]: ${message}` }],
       isError: true
     };
   }
@@ -116,7 +101,7 @@ export function registerSchemaTool(server: McpServer): void {
         'Returns the Snapshot GraphQL schema. Large response: call only when a snapshot-query fails on an unknown field, not preemptively. Common queries are listed in the server instructions.',
       inputSchema: {}
     },
-    (extra) => handle({ tool: 'snapshot-schema', extra }, () => schemaCache)
+    (extra) => handle('snapshot-schema', extra, () => schemaCache)
   );
 }
 
@@ -138,12 +123,12 @@ export function registerQueryTool(
       }
     },
     ({ query, variables }, extra) =>
-      handle({ tool: 'snapshot-query', extra }, async () => {
+      handle('snapshot-query', extra, async () => {
         let user: string | undefined;
         try {
           ({ user } = await resolveContext(extra));
         } catch {
-          // anonymous read-only queries are still allowed
+          // Anonymous read-only queries are still allowed.
         }
         return gql(query, user ? { ...variables, user } : variables);
       })
@@ -176,7 +161,7 @@ export function registerVoteTool(
       }
     },
     (data, extra) =>
-      handle({ tool: 'snapshot-vote', extra }, async () => {
+      handle('snapshot-vote', extra, async () => {
         const { user: from, signer } = await resolveContext(extra);
         const { proposal } = (await gql(
           'query ($id: String!) { proposal(id: $id) { type privacy } }',
@@ -279,7 +264,7 @@ export function registerProposeTool(
       }
     },
     (data, extra) =>
-      handle({ tool: 'snapshot-propose', extra }, async () => {
+      handle('snapshot-propose', extra, async () => {
         const { user: from, signer } = await resolveContext(extra);
 
         const { space } = (await gql(
@@ -397,7 +382,7 @@ export function registerFollowTool(
       }
     },
     (data, extra) =>
-      handle({ tool: 'snapshot-follow', extra }, async () => {
+      handle('snapshot-follow', extra, async () => {
         const { user: from, signer } = await resolveContext(extra);
         const { space } = (await gql(
           'query ($id: String!) { space(id: $id) { id } }',
