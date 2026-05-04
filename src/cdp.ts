@@ -5,7 +5,7 @@ import {
   type EvmServerAccount
 } from '@coinbase/cdp-sdk';
 
-const POLICY_DESCRIPTION = 'snapshot mcp v3';
+const POLICY_DESCRIPTION = 'snapshot mcp v4';
 
 // Accept only Snapshot-domain typed data; reject all else (CDP requires a primaryType per rule).
 const POLICY_RULES = [
@@ -110,9 +110,15 @@ async function ensurePolicy(): Promise<string> {
 }
 
 export async function getWalletForUser(signerKey: string): Promise<CdpSigner> {
-  const account = await getCdpClient().evm.getOrCreateAccount({
-    name: signerKey
-  });
+  const cdp = getCdpClient();
+  const account = await cdp.evm.getOrCreateAccount({ name: signerKey });
+  const accountPolicy = await ensurePolicy();
+  if (account.policies?.includes(accountPolicy) !== true) {
+    await cdp.evm.updateAccount({
+      address: account.address,
+      update: { accountPolicy }
+    });
+  }
   return makeCdpSigner(account);
 }
 
