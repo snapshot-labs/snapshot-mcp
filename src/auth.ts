@@ -56,8 +56,14 @@ const clientsStore: OAuthRegisteredClientsStore = {
     }
   },
   async registerClient(client) {
+    if (client.token_endpoint_auth_method !== 'none') {
+      throw new Error(
+        'Only public clients are supported. Register with token_endpoint_auth_method: "none" and use PKCE.'
+      );
+    }
+    const { client_secret, client_secret_expires_at, ...safe } = client;
     const metadata = {
-      ...client,
+      ...safe,
       client_id_issued_at: Math.floor(Date.now() / 1000)
     };
     const clientId = await sign({ metadata });
