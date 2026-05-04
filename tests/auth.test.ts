@@ -115,32 +115,22 @@ describe('OAuth provider security', () => {
     );
   });
 
-  test('registerClient rejects confidential clients (client_secret would leak in client_id JWT)', async () => {
-    await expect(
-      provider.clientsStore.registerClient!({
+  test('registered client_id JWT never contains a client_secret, regardless of auth method', async () => {
+    for (const method of ['none', 'client_secret_basic', 'client_secret_post', undefined]) {
+      const client = await provider.clientsStore.registerClient!({
         ...CLIENT_METADATA,
-        token_endpoint_auth_method: 'client_secret_basic'
-      })
-    ).rejects.toThrow('Only public clients are supported');
-    await expect(
-      provider.clientsStore.registerClient!({
-        ...CLIENT_METADATA,
-        token_endpoint_auth_method: 'client_secret_post'
-      })
-    ).rejects.toThrow('Only public clients are supported');
-  });
-
-  test('registered client_id JWT never contains a client_secret', async () => {
-    const client = await provider.clientsStore.registerClient!({
-      ...CLIENT_METADATA,
-      client_secret: 'should-be-stripped',
-      client_secret_expires_at: 9999999999
-    } as any);
-    const payloadSegment = client.client_id.split('.')[1];
-    const decoded = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString());
-    expect(decoded).not.toHaveProperty('client_secret');
-    expect(JSON.stringify(decoded)).not.toContain('should-be-stripped');
-    expect(JSON.stringify(decoded.metadata ?? {})).not.toContain('client_secret');
+        token_endpoint_auth_method: method,
+        client_secret: 'should-be-stripped',
+        client_secret_expires_at: 9999999999
+      } as any);
+      const payloadSegment = client.client_id.split('.')[1];
+      const decoded = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString());
+      expect(decoded).not.toHaveProperty('client_secret');
+      expect(decoded.metadata ?? {}).not.toHaveProperty('client_secret');
+      expect(decoded.metadata ?? {}).not.toHaveProperty('client_secret_expires_at');
+      expect(JSON.stringify(decoded)).not.toContain('should-be-stripped');
+      expect(client).not.toHaveProperty('client_secret');
+    }
   });
 
   test('each authorize() call mints a different per-session alias', async () => {

@@ -56,11 +56,8 @@ const clientsStore: OAuthRegisteredClientsStore = {
     }
   },
   async registerClient(client) {
-    if (client.token_endpoint_auth_method !== 'none') {
-      throw new Error(
-        'Only public clients are supported. Register with token_endpoint_auth_method: "none" and use PKCE.'
-      );
-    }
+    // Strip secrets: client_id is a signed-not-encrypted JWT, anything left
+    // here would be readable wherever the client_id is exposed.
     const { client_secret, client_secret_expires_at, ...safe } = client;
     const metadata = {
       ...safe,
