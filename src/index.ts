@@ -76,7 +76,7 @@ if (process.argv.includes('--stdio')) {
       return;
     }
 
-    if (sessionId === undefined && isInitializeRequest(req.body)) {
+    if (isInitializeRequest(req.body)) {
       const transport: StreamableHTTPServerTransport =
         new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
@@ -89,6 +89,15 @@ if (process.argv.includes('--stdio')) {
       };
       await createMcpServer('http').connect(transport);
       await transport.handleRequest(req, res, req.body);
+      return;
+    }
+
+    if (sessionId !== undefined) {
+      res.status(404).json({
+        jsonrpc: '2.0',
+        error: { code: -32001, message: 'Session not found' },
+        id: null
+      });
       return;
     }
 
@@ -106,7 +115,9 @@ if (process.argv.includes('--stdio')) {
     const sessionId = req.headers['mcp-session-id'] as string | undefined;
     const transport = sessionId !== undefined ? transports.get(sessionId) : undefined;
     if (!transport) {
-      res.status(400).send('Invalid or missing session ID');
+      res
+        .status(sessionId !== undefined ? 404 : 400)
+        .send(sessionId !== undefined ? 'Session not found' : 'Missing session ID');
       return;
     }
     await transport.handleRequest(req, res);
