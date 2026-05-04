@@ -34,46 +34,22 @@ async function sign(claims: JWTPayload, exp?: string): Promise<string> {
   return jwt.sign(getSecret());
 }
 
-async function verify(token: string): Promise<JWTPayload> {
-  const { payload } = await jwtVerify(token, getSecret(), {
-    algorithms: [ALG]
-  });
-  return payload;
+/** JWT signature already authenticates the payload, so the type cast is sound. */
+async function verifyAs<T>(token: string): Promise<T & JWTPayload> {
+  const { payload } = await jwtVerify(token, getSecret(), { algorithms: [ALG] });
+  return payload as unknown as T & JWTPayload;
 }
 
-export async function signAccessToken(payload: {
-  user: string;
-  signerKey: string;
-  clientId: string;
-}): Promise<string> {
-  return sign(
-    {
-      sub: payload.user,
-      aud: payload.clientId,
-      signerKey: payload.signerKey
-    },
-    '1y'
-  );
+async function rebrand<T>(p: Promise<T>, msg: string): Promise<T> {
+  try { return await p; } catch { throw new Error(msg); }
 }
 
 type ClientMetadata = Omit<OAuthClientInformationFull, 'client_id'>;
 
-async function signClientId(metadata: ClientMetadata): Promise<string> {
-  return sign({ metadata });
-}
-
-async function verifyClientId(clientId: string): Promise<ClientMetadata> {
-  const p = await verify(clientId);
-  if (p.metadata == null || typeof p.metadata !== 'object') {
-    throw new Error('Invalid client_id');
-  }
-  return p.metadata as ClientMetadata;
-}
-
 const clientsStore: OAuthRegisteredClientsStore = {
   async getClient(clientId) {
     try {
-      const metadata = await verifyClientId(clientId);
+      const { metadata } = await verifyAs<{ metadata: ClientMetadata }>(clientId);
       return { ...metadata, client_id: clientId };
     } catch {
       return undefined;
@@ -84,7 +60,7 @@ const clientsStore: OAuthRegisteredClientsStore = {
       ...client,
       client_id_issued_at: Math.floor(Date.now() / 1000)
     };
-    const clientId = await signClientId(metadata);
+    const clientId = await sign({ metadata });
     return { ...metadata, client_id: clientId } as OAuthClientInformationFull;
   }
 };
@@ -98,53 +74,7 @@ interface Session {
   state?: string;
 }
 type CodeSession = Session & { user: string };
-
-function readSessionFields(p: JWTPayload): Session {
-  if (
-    typeof p.clientId !== 'string' ||
-    typeof p.codeChallenge !== 'string' ||
-    typeof p.redirectUri !== 'string' ||
-    typeof p.signerKey !== 'string' ||
-    typeof p.signerAddress !== 'string'
-  ) {
-    throw new Error('Invalid session token');
-  }
-  return {
-    clientId: p.clientId,
-    codeChallenge: p.codeChallenge,
-    redirectUri: p.redirectUri,
-    signerKey: p.signerKey,
-    signerAddress: p.signerAddress,
-    state: typeof p.state === 'string' ? p.state : undefined
-  };
-}
-
 type VerifiedCode = CodeSession & { nonce: string; exp: number };
-
-async function signSessionToken(session: Session): Promise<string> {
-  return sign({ ...session } as JWTPayload, '10m');
-}
-
-async function verifySessionToken(token: string): Promise<Session> {
-  return readSessionFields(await verify(token));
-}
-
-async function signCodeToken(session: CodeSession): Promise<string> {
-  return sign({ ...session } as JWTPayload, '60s');
-}
-
-async function verifyCodeToken(token: string): Promise<VerifiedCode> {
-  const p = await verify(token);
-  const base = readSessionFields(p);
-  if (
-    typeof p.user !== 'string' ||
-    typeof p.nonce !== 'string' ||
-    typeof p.exp !== 'number'
-  ) {
-    throw new Error('Invalid code');
-  }
-  return { ...base, user: p.user, nonce: p.nonce, exp: p.exp };
-}
 
 export class SnapshotOAuthProvider implements OAuthServerProvider {
   clientsStore = clientsStore;
@@ -157,12 +87,8 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
 
   private markCodeUsed(nonce: string, exp: number): void {
     const now = Math.floor(Date.now() / 1000);
-    for (const [k, v] of this.usedCodes) {
-      if (v <= now) this.usedCodes.delete(k);
-    }
-    if (this.usedCodes.has(nonce)) {
-      throw new Error('Unknown authorization code');
-    }
+    for (const [k, v] of this.usedCodes) if (v <= now) this.usedCodes.delete(k);
+    if (this.usedCodes.has(nonce)) throw new Error('Unknown authorization code');
     this.usedCodes.set(nonce, exp);
   }
 
@@ -172,54 +98,43 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
     res: Response
   ): Promise<void> {
     const { signerKey, signerAddress } = await createFreshAccount();
-    const sessionToken = await signSessionToken({
-      redirectUri: params.redirectUri,
-      state: params.state,
-      codeChallenge: params.codeChallenge,
-      clientId: client.client_id,
-      signerKey,
-      signerAddress
-    });
-
-    const baseUrl =
-      process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? 8080}`;
+    const sessionToken = await sign(
+      {
+        redirectUri: params.redirectUri,
+        state: params.state,
+        codeChallenge: params.codeChallenge,
+        clientId: client.client_id,
+        signerKey,
+        signerAddress
+      } as JWTPayload,
+      '10m'
+    );
+    const baseUrl = process.env.BASE_URL ?? `http://localhost:${process.env.PORT ?? 8080}`;
     const callbackUrl = `${baseUrl}/auth/callback?session=${encodeURIComponent(sessionToken)}`;
-
-    const snapshotUrl = `https://snapshot.box/#/settings/alias/authorize/${signerAddress}?redirect_uri=${encodeURIComponent(callbackUrl)}`;
-    res.redirect(snapshotUrl);
+    res.redirect(
+      `https://snapshot.box/#/settings/alias/authorize/${signerAddress}?redirect_uri=${encodeURIComponent(callbackUrl)}`
+    );
   }
 
   async challengeForAuthorizationCode(
     _client: OAuthClientInformationFull,
-    authorizationCode: string
+    code: string
   ): Promise<string> {
-    try {
-      return (await verifyCodeToken(authorizationCode)).codeChallenge;
-    } catch {
-      throw new Error('Unknown authorization code');
-    }
+    return (await rebrand(verifyAs<CodeSession>(code), 'Unknown authorization code')).codeChallenge;
   }
 
   async exchangeAuthorizationCode(
     client: OAuthClientInformationFull,
     authorizationCode: string
   ): Promise<OAuthTokens> {
-    let code: VerifiedCode;
-    try {
-      code = await verifyCodeToken(authorizationCode);
-    } catch {
-      throw new Error('Unknown authorization code');
-    }
-    if (code.clientId !== client.client_id)
-      throw new Error('Client mismatch');
-    this.markCodeUsed(code.nonce, code.exp);
-
-    const accessToken = await signAccessToken({
-      user: code.user,
-      signerKey: code.signerKey,
-      clientId: client.client_id
-    });
-    return { access_token: accessToken, token_type: 'bearer' };
+    const c = await rebrand(verifyAs<VerifiedCode>(authorizationCode), 'Unknown authorization code');
+    if (c.clientId !== client.client_id) throw new Error('Client mismatch');
+    this.markCodeUsed(c.nonce, c.exp);
+    const access_token = await sign(
+      { sub: c.user, aud: client.client_id, signerKey: c.signerKey },
+      '1y'
+    );
+    return { access_token, token_type: 'bearer' };
   }
 
   async exchangeRefreshToken(): Promise<OAuthTokens> {
@@ -227,7 +142,7 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const p = await verify(token);
+    const p = await verifyAs<{ sub: string; aud: string; signerKey: string }>(token);
     if (
       typeof p.sub !== 'string' ||
       typeof p.aud !== 'string' ||
@@ -241,29 +156,18 @@ export class SnapshotOAuthProvider implements OAuthServerProvider {
       clientId: p.aud,
       scopes: [],
       expiresAt: p.exp,
-      extra: {
-        user: p.sub,
-        signerKey: p.signerKey
-      }
+      extra: { user: p.sub, signerKey: p.signerKey }
     };
   }
 
   async handleCallback(sessionToken: string): Promise<string> {
-    let session: Session;
-    try {
-      session = await verifySessionToken(sessionToken);
-    } catch {
-      throw new Error('Unknown session');
-    }
-
-    const user = await resolveUserFromAlias(session.signerAddress);
+    const s = await rebrand(verifyAs<Session>(sessionToken), 'Unknown session');
+    const user = await resolveUserFromAlias(s.signerAddress);
     if (user === undefined) throw new Error('Alias not authorized');
-
-    const code = await signCodeToken({ ...session, user });
-
-    const url = new URL(session.redirectUri);
+    const code = await sign({ ...s, user } as JWTPayload, '60s');
+    const url = new URL(s.redirectUri);
     url.searchParams.set('code', code);
-    if (session.state !== undefined) url.searchParams.set('state', session.state);
+    if (s.state !== undefined) url.searchParams.set('state', s.state);
     return url.toString();
   }
 

@@ -61,11 +61,27 @@ type ToolResponse = {
   isError?: boolean;
 };
 
-type Extra = {
-  requestId?: unknown;
-  sessionId?: unknown;
-  authInfo?: AuthInfoExtra;
+type Extra = { requestId?: unknown; sessionId?: unknown; authInfo?: AuthInfoExtra };
+
+type SpaceInfo = {
+  id: string;
+  network: string;
+  voting: {
+    delay: number | null;
+    period: number | null;
+    type: string | null;
+    privacy: string | null;
+  };
 };
+
+async function requireSpace<T>(id: string, fields: string): Promise<T> {
+  const { space } = (await gql(
+    `query ($id: String!) { space(id: $id) { ${fields} } }`,
+    { id }
+  )) as { space: T | null };
+  if (space === null) throw new Error(`Space not found: ${id}`);
+  return space;
+}
 
 async function handle(
   tool: string,
@@ -221,137 +237,58 @@ export function registerProposeTool(
         space: z.string().describe('Space ID slug (e.g. "ens.eth")'),
         title: z.string().min(1).describe('Proposal title'),
         body: z.string().default('').describe('Proposal body (markdown)'),
-        discussion: z
-          .string()
-          .default('')
-          .describe('Discussion link (optional)'),
-        type: z
-          .enum(VOTE_TYPES)
-          .optional()
-          .describe(
-            'Voting type. Defaults to the space\'s enforced type, or "basic" if the space allows any.'
-          ),
-        choices: z
-          .array(z.string().min(1))
-          .optional()
-          .describe(
-            'Vote choices. Defaults to ["For","Against","Abstain"] for "basic". Required for other types.'
-          ),
-        labels: z
-          .array(z.string())
-          .default([])
-          .describe('Proposal label IDs (optional)'),
-        start: z
-          .number()
-          .int()
-          .optional()
-          .describe(
-            'Voting start (unix seconds). Defaults to now + space.voting.delay.'
-          ),
-        end: z
-          .number()
-          .int()
-          .optional()
-          .describe(
-            'Voting end (unix seconds). Defaults to start + space.voting.period (3 days if unset).'
-          ),
-        shielded: z
-          .boolean()
-          .optional()
-          .describe(
-            'Opt into Shutter shielded voting. Only honored when the space\'s voting.privacy is "any".'
-          )
+        discussion: z.string().default('').describe('Discussion link (optional)'),
+        type: z.enum(VOTE_TYPES).optional().describe('Voting type. Defaults to the space\'s enforced type, or "basic" if the space allows any.'),
+        choices: z.array(z.string().min(1)).optional().describe('Vote choices. Defaults to ["For","Against","Abstain"] for "basic". Required for other types.'),
+        labels: z.array(z.string()).default([]).describe('Proposal label IDs (optional)'),
+        start: z.number().int().optional().describe('Voting start (unix seconds). Defaults to now + space.voting.delay.'),
+        end: z.number().int().optional().describe('Voting end (unix seconds). Defaults to start + space.voting.period (3 days if unset).'),
+        shielded: z.boolean().optional().describe('Opt into Shutter shielded voting. Only honored when the space\'s voting.privacy is "any".')
       }
     },
     (data, extra) =>
       handle('snapshot-propose', extra, async () => {
         const { user: from, signer } = await resolveContext(extra);
-
-        const { space } = (await gql(
-          `query ($id: String!) {
-            space(id: $id) {
-              id
-              network
-              voting { delay period type privacy }
-            }
-          }`,
-          { id: data.space }
-        )) as {
-          space: {
-            id: string;
-            network: string;
-            voting: {
-              delay: number | null;
-              period: number | null;
-              type: string | null;
-              privacy: string | null;
-            };
-          } | null;
-        };
-        if (!space) throw new Error(`Space not found: ${data.space}`);
+        const space = await requireSpace<SpaceInfo>(
+          data.space,
+          'id network voting { delay period type privacy }'
+        );
 
         const enforcedType = space.voting.type;
         if (enforcedType && data.type && data.type !== enforcedType) {
-          throw new Error(
-            `Space "${space.id}" enforces voting type "${enforcedType}"`
-          );
+          throw new Error(`Space "${space.id}" enforces voting type "${enforcedType}"`);
         }
         const type = data.type ?? enforcedType ?? 'basic';
 
-        const choices =
-          data.choices ??
-          (type === 'basic' ? ['For', 'Against', 'Abstain'] : []);
+        const choices = data.choices ?? (type === 'basic' ? ['For', 'Against', 'Abstain'] : []);
         if (choices.length < 2) {
-          throw new Error(
-            `\`choices\` is required for voting type "${type}" (need at least 2)`
-          );
+          throw new Error(`\`choices\` is required for voting type "${type}" (need at least 2)`);
         }
 
         const spacePrivacy = space.voting.privacy ?? '';
-        if (
-          data.shielded &&
-          spacePrivacy !== 'any' &&
-          spacePrivacy !== 'shutter'
-        ) {
-          throw new Error(
-            `Space "${space.id}" does not allow shielded voting (voting.privacy = "${spacePrivacy || 'none'}")`
-          );
+        if (data.shielded && spacePrivacy !== 'any' && spacePrivacy !== 'shutter') {
+          throw new Error(`Space "${space.id}" does not allow shielded voting (voting.privacy = "${spacePrivacy || 'none'}")`);
         }
-        const privacy =
-          spacePrivacy === 'shutter' || data.shielded ? 'shutter' : '';
+        const privacy = spacePrivacy === 'shutter' || data.shielded ? 'shutter' : '';
 
         const now = Math.floor(Date.now() / 1000);
         const start = data.start ?? now + (space.voting.delay ?? 0);
         const period = space.voting.period ?? DEFAULT_VOTING_PERIOD;
         const end = data.end ?? start + (period > 0 ? period : DEFAULT_VOTING_PERIOD);
-        if (end <= start) {
-          throw new Error('`end` must be greater than `start`');
-        }
+        if (end <= start) throw new Error('`end` must be greater than `start`');
 
         const chainId = Number(space.network);
         if (!Number.isFinite(chainId)) {
-          throw new Error(
-            `Space "${space.id}" has unsupported network "${space.network}"`
-          );
+          throw new Error(`Space "${space.id}" has unsupported network "${space.network}"`);
         }
 
         const envelope = await sx.propose({
           signer: signer as Wallet,
           data: {
-            space: space.id,
-            type,
-            title: data.title,
-            body: data.body,
-            discussion: data.discussion,
-            choices,
-            privacy,
-            labels: data.labels,
-            start,
-            end,
-            snapshot: await getProposalSnapshotBlock(chainId),
-            plugins: '{}',
-            app: 'snapshot-mcp',
-            from
+            space: space.id, type, title: data.title, body: data.body,
+            discussion: data.discussion, choices, privacy, labels: data.labels,
+            start, end, snapshot: await getProposalSnapshotBlock(chainId),
+            plugins: '{}', app: 'snapshot-mcp', from
           } as Parameters<typeof sx.propose>[0]['data']
         });
         const result = (await sx.send(envelope)) as { id?: string };
@@ -359,9 +296,7 @@ export function registerProposeTool(
           result,
           links: {
             space: `https://snapshot.box/#/s:${space.id}`,
-            proposal: result.id
-              ? `https://snapshot.box/#/s:${space.id}/proposal/${result.id}`
-              : undefined
+            proposal: result.id ? `https://snapshot.box/#/s:${space.id}/proposal/${result.id}` : undefined
           }
         };
       })
@@ -384,20 +319,13 @@ export function registerFollowTool(
     (data, extra) =>
       handle('snapshot-follow', extra, async () => {
         const { user: from, signer } = await resolveContext(extra);
-        const { space } = (await gql(
-          'query ($id: String!) { space(id: $id) { id } }',
-          { id: data.space }
-        )) as { space: { id: string } | null };
-        if (!space) throw new Error(`Space not found: ${data.space}`);
+        const space = await requireSpace<{ id: string }>(data.space, 'id');
         const envelope = await sx.followSpace({
           signer: signer as Wallet,
           data: { from, space: space.id, network: 's' }
         });
         const result = (await sx.send(envelope)) as unknown;
-        return {
-          result,
-          links: { space: `https://snapshot.box/#/s:${space.id}` }
-        };
+        return { result, links: { space: `https://snapshot.box/#/s:${space.id}` } };
       })
   );
 }
