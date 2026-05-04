@@ -400,13 +400,13 @@ export function registerFollowTool(
       handle({ tool: 'snapshot-follow', extra }, async () => {
         const { user: from, signer } = await resolveContext(extra);
         const { space } = (await gql(
-          'query ($id: String!) { space(id: $id) { id network } }',
+          'query ($id: String!) { space(id: $id) { id } }',
           { id: data.space }
-        )) as { space: { id: string; network: string } | null };
+        )) as { space: { id: string } | null };
         if (!space) throw new Error(`Space not found: ${data.space}`);
         const envelope = await sx.followSpace({
           signer: signer as Wallet,
-          data: { from, space: space.id, network: space.network }
+          data: { from, space: space.id, network: 's' }
         });
         const result = (await sx.send(envelope)) as unknown;
         return {
