@@ -251,7 +251,7 @@ export function registerProposeTool(
     },
     (data, extra) =>
       handle(async () => {
-        const { signer } = await resolveContext(extra);
+        const { user: from, signer } = await resolveContext(extra);
 
         const { space } = (await gql(
           `query ($id: String!) {
@@ -336,8 +336,9 @@ export function registerProposeTool(
             end,
             snapshot: await getProposalSnapshotBlock(chainId),
             plugins: '{}',
-            app: 'snapshot-mcp'
-          }
+            app: 'snapshot-mcp',
+            from
+          } as Parameters<typeof sx.propose>[0]['data']
         });
         const result = (await sx.send(envelope)) as { id?: string };
         return {
