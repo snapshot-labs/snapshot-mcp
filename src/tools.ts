@@ -232,7 +232,7 @@ export function registerProposeTool(
     'snapshot-propose',
     {
       description:
-        'Create a Snapshot proposal. Only `space`, `title`, `body` are required. The space\'s enforced voting type, voting period, snapshot block, and privacy mode are read from the space and applied automatically. `choices` defaults to ["For", "Against", "Abstain"] for basic voting and is required for other types. Pass `shielded: true` only on spaces where `voting.privacy === "any"` to opt into Shutter encryption; spaces with `voting.privacy === "shutter"` always encrypt.',
+        'Create a Snapshot proposal. Only `space`, `title`, `body` are required. The space\'s enforced voting type, voting period, snapshot block, and privacy mode are read from the space and applied automatically. `choices` defaults to ["For", "Against", "Abstain"] for basic voting and is required for other types. Pass `privacy: "shutter"` only on spaces where `voting.privacy === "any"` to opt into Shutter encryption; spaces with `voting.privacy === "shutter"` always encrypt.',
       inputSchema: {
         space: z.string().describe('Space ID slug (e.g. "ens.eth")'),
         title: z.string().min(1).describe('Proposal title'),
@@ -243,7 +243,7 @@ export function registerProposeTool(
         labels: z.array(z.string()).default([]).describe('Proposal label IDs (optional)'),
         start: z.number().int().optional().describe('Voting start (unix seconds). Defaults to now + space.voting.delay.'),
         end: z.number().int().optional().describe('Voting end (unix seconds). Defaults to start + space.voting.period (3 days if unset).'),
-        shielded: z.boolean().optional().describe('Opt into Shutter shielded voting. Only honored when the space\'s voting.privacy is "any".')
+        privacy: z.enum(['shutter', 'none']).optional().describe('Shutter shielded voting. Only honored when the space\'s voting.privacy is "any" (or already "shutter", in which case it is forced).')
       }
     },
     (data, extra) =>
@@ -266,10 +266,11 @@ export function registerProposeTool(
         }
 
         const spacePrivacy = space.voting.privacy ?? '';
-        if (data.shielded && spacePrivacy !== 'any' && spacePrivacy !== 'shutter') {
+        const wantsShutter = data.privacy === 'shutter';
+        if (wantsShutter && spacePrivacy !== 'any' && spacePrivacy !== 'shutter') {
           throw new Error(`Space "${space.id}" does not allow shielded voting (voting.privacy = "${spacePrivacy || 'none'}")`);
         }
-        const privacy = spacePrivacy === 'shutter' || data.shielded ? 'shutter' : '';
+        const privacy = spacePrivacy === 'shutter' || wantsShutter ? 'shutter' : '';
 
         const now = Math.floor(Date.now() / 1000);
         const start = data.start ?? now + (space.voting.delay ?? 0);
