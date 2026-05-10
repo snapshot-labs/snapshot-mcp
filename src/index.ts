@@ -1,33 +1,71 @@
-import { randomUUID } from 'node:crypto';
-import { createServer } from 'node:http';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
+import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createMcpServer } from './server.js';
+import { type Request, type Response } from 'express';
+import pkg from '../package.json' with { type: 'json' };
+import { SnapshotOAuthProvider } from './auth.js';
+import instructions from './instructions.md' with { type: 'text' };
+import {
+  createResolveContext,
+  registerFollowTool,
+  registerProposeTool,
+  registerQueryTool,
+  registerSchemaTool,
+  registerVoteTool
+} from './tools.js';
 
-const transports = new Map<string, StreamableHTTPServerTransport>();
+const ICONS = [
+  { src: 'https://snapshot.box/favicon-dark.svg', mimeType: 'image/svg+xml', sizes: ['any'], theme: 'light' as const },
+  { src: 'https://snapshot.box/favicon.svg', mimeType: 'image/svg+xml', sizes: ['any'], theme: 'dark' as const }
+];
 
-createServer(async (req, res) => {
-  if (req.url !== '/') {
-    return void res.writeHead(404).end();
-  }
+function createMcpServer(mode: 'http' | 'stdio'): McpServer {
+  const server = new McpServer(
+    {
+      name: 'snapshot',
+      title: 'Snapshot',
+      version: pkg.version,
+      websiteUrl: 'https://snapshot.box',
+      icons: ICONS
+    },
+    { instructions }
+  );
+  const resolveContext = createResolveContext(mode);
+  registerSchemaTool(server);
+  registerQueryTool(server, resolveContext);
+  registerVoteTool(server, resolveContext);
+  registerProposeTool(server, resolveContext);
+  registerFollowTool(server, resolveContext);
+  return server;
+}
 
-  const sessionId = req.headers['mcp-session-id'] as string | undefined;
-  const transport = sessionId ? transports.get(sessionId) : undefined;
+if (process.argv.includes('--stdio')) {
+  await createMcpServer('stdio').connect(new StdioServerTransport());
+} else {
+  const port = Number(process.env.PORT ?? 8080);
+  const baseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;
 
-  if (!sessionId && req.method === 'POST') {
-    const t = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID()
+  const app = createMcpExpressApp({ host: '0.0.0.0' });
+  app.set('trust proxy', 1);
+
+  const provider = new SnapshotOAuthProvider();
+  app.use(mcpAuthRouter({ provider, issuerUrl: new URL(baseUrl) }));
+  app.get('/auth/callback', provider.callback);
+
+  const authMiddleware = requireBearerAuth({ verifier: provider });
+
+  // Stateless mode: a fresh transport per request so deploys never strand an active session.
+  app.post('/', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined
     });
+    res.on('close', () => { transport.close().catch(() => {}); });
+    await createMcpServer('http').connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  });
 
-    await createMcpServer().connect(t);
-    await t.handleRequest(req, res);
-
-    if (t.sessionId) {
-      transports.set(t.sessionId, t);
-      t.onclose = () => transports.delete(t.sessionId!);
-    }
-  } else if (transport) {
-    await transport.handleRequest(req, res);
-  } else {
-    res.writeHead(400).end('Bad Request');
-  }
-}).listen(process.env.PORT ?? 8080);
+  app.listen(port);
+}
