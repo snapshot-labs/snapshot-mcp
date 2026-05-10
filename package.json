@@ -9,7 +9,9 @@
     "start": "bun src/index.ts",
     "stdio": "bun src/index.ts --stdio",
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint src tests",
+    "lint:fix": "bun run lint --fix",
     "format": "prettier --write src tests"
   },
   "dependencies": {
